@@ -1,0 +1,210 @@
+{
+  "activeNodeId": "auth-service",
+  "nodes": [
+    {
+      "id": "auth-service",
+      "name": "Auth Service",
+      "type": "service",
+      "summary": "Xu ly login, refresh token va session sync cho toan bo ung dung.",
+      "severity": "high",
+      "files": [
+        "src/auth/index.ts",
+        "src/auth/token-store.ts"
+      ],
+      "relations": [
+        "login-modal",
+        "api-gateway"
+      ],
+      "contextWindow": [
+        {
+          "label": "Primary scope",
+          "detail": "Refresh token bi invalid sau 15 phut du cookie con han."
+        },
+        {
+          "label": "Recent change",
+          "detail": "Da doi logic rotate token de chong replay attack."
+        },
+        {
+          "label": "Debug anchor",
+          "detail": "Kiem tra saveSession() va thu tu update giua local cache voi cookie."
+        }
+      ],
+      "debugSignals": [
+        {
+          "title": "401 sau refresh",
+          "location": "src/auth/token-store.ts:88",
+          "symptom": "Token moi duoc ghi vao storage nhung request ke tiep van gui token cu."
+        },
+        {
+          "title": "Race condition",
+          "location": "src/auth/index.ts:142",
+          "symptom": "Hai promise refresh chay song song khi app resume tu background."
+        }
+      ],
+      "chatHistory": [
+        {
+          "role": "user",
+          "timestamp": "09:10",
+          "message": "Loi chi xuat hien sau khi tab sleep roi quay lai."
+        },
+        {
+          "role": "assistant",
+          "timestamp": "09:12",
+          "message": "Nen trace lai vong doi refresh token va xem request nao ghi de session cuoi cung."
+        }
+      ],
+      "notes": [
+        "Uu tien them request lock de ngan refresh song song."
+      ],
+      "openIssues": 2
+    },
+    {
+      "id": "login-modal",
+      "name": "Login Modal",
+      "type": "ui",
+      "summary": "Node UI de nhap thong tin dang nhap, hien thi trang thai loi va loading.",
+      "severity": "medium",
+      "files": [
+        "src/features/login/LoginModal.tsx"
+      ],
+      "relations": [
+        "auth-service",
+        "session-cache"
+      ],
+      "contextWindow": [
+        {
+          "label": "Primary scope",
+          "detail": "Spinner loading khong tat khi auth request fail vi timeout."
+        },
+        {
+          "label": "Visual symptom",
+          "detail": "Form bi khoa khien user tuong he thong dung."
+        }
+      ],
+      "debugSignals": [
+        {
+          "title": "UI stuck",
+          "location": "src/features/login/LoginModal.tsx:201",
+          "symptom": "finally() khong chay vi mutation bi abort o nhanh phu."
+        }
+      ],
+      "chatHistory": [
+        {
+          "role": "user",
+          "timestamp": "10:05",
+          "message": "Minh nghi modal khong reset state sau loi mang."
+        }
+      ],
+      "notes": [
+        "Can dam bao state submitting duoc reset o moi nhanh."
+      ],
+      "openIssues": 1
+    },
+    {
+      "id": "api-gateway",
+      "name": "API Gateway",
+      "type": "backend",
+      "summary": "Diem vao cua request client, co retry, logging va error mapping.",
+      "severity": "critical",
+      "files": [
+        "src/server/gateway.ts",
+        "src/server/retry-policy.ts"
+      ],
+      "relations": [
+        "auth-service",
+        "audit-log",
+        "session-cache"
+      ],
+      "contextWindow": [
+        {
+          "label": "Primary scope",
+          "detail": "Gateway retry request 401 lam vong refresh bi lap vo han."
+        },
+        {
+          "label": "Error route",
+          "detail": "Mapped error code AUTH_RETRY_LOOP chua duoc surface ra UI."
+        },
+        {
+          "label": "Debug anchor",
+          "detail": "Kiem tra retry-policy voi dieu kien shouldRetryAuthError."
+        }
+      ],
+      "debugSignals": [
+        {
+          "title": "Infinite retry",
+          "location": "src/server/retry-policy.ts:47",
+          "symptom": "Request bi retry lien tuc du response da danh dau doNotRetry."
+        },
+        {
+          "title": "Missing correlation id",
+          "location": "src/server/gateway.ts:29",
+          "symptom": "Trace log khong noi duoc tu UI sang backend do thieu context id."
+        }
+      ],
+      "chatHistory": [
+        {
+          "role": "assistant",
+          "timestamp": "10:42",
+          "message": "Node nay nen la trung tam debug vi no noi request path, auth state va server logs."
+        }
+      ],
+      "notes": [
+        "Tao field correlationId o moi edge de lan loi sau trace nhanh hon."
+      ],
+      "openIssues": 3
+    },
+    {
+      "id": "session-cache",
+      "name": "Session Cache",
+      "type": "memory",
+      "summary": "Lop cache giu phien gan nhat va context window cua session dang hoat dong.",
+      "severity": "low",
+      "files": [
+        "src/cache/session.ts"
+      ],
+      "relations": [
+        "auth-service",
+        "login-modal"
+      ],
+      "contextWindow": [
+        {
+          "label": "Primary scope",
+          "detail": "Cache khong tu invalid khi logout tu tab khac."
+        }
+      ],
+      "debugSignals": [],
+      "chatHistory": [],
+      "notes": [],
+      "openIssues": 0
+    },
+    {
+      "id": "audit-log",
+      "name": "Audit Log",
+      "type": "observability",
+      "summary": "Luu lai thay doi quan trong de doi chieu cac buoc dan den loi.",
+      "severity": "medium",
+      "files": [
+        "src/logging/audit.ts"
+      ],
+      "relations": [
+        "api-gateway"
+      ],
+      "contextWindow": [
+        {
+          "label": "Primary scope",
+          "detail": "Audit trail con thieu actor context khi request bat dau tu background job."
+        }
+      ],
+      "debugSignals": [
+        {
+          "title": "Lost actor",
+          "location": "src/logging/audit.ts:64",
+          "symptom": "Ban ghi khong cho biet request toi tu user hay system task."
+        }
+      ],
+      "chatHistory": [],
+      "notes": [],
+      "openIssues": 1
+    }
+  ]
+}

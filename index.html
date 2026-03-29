@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Graph Memory Debug Workspace</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand-block">
+        <p class="eyebrow">Graph Memory</p>
+        <h1>Debug Atlas</h1>
+        <p class="brand-copy">
+          Lưu ngữ cảnh theo node để truy vết lỗi, giữ chat history và gom context window cho mỗi phiên sửa.
+        </p>
+      </div>
+
+      <label class="search-block">
+        <span>Tra cứu node, file, lỗi</span>
+        <input id="searchInput" type="search" placeholder="Ví dụ: auth, timeout, websocket">
+      </label>
+
+      <div class="sidebar-section">
+        <div class="section-heading">
+          <h2>Node Registry</h2>
+          <span id="nodeCount">0 nodes</span>
+        </div>
+        <div id="nodeList" class="node-list"></div>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Context-first debugging</p>
+          <h2 id="activeNodeName">Chọn một node để bắt đầu</h2>
+          <p id="activeNodeSummary" class="hero-copy">
+            Mỗi node giữ component scope, file liên quan, lỗi gần nhất, chat history và context window.
+          </p>
+        </div>
+        <div class="hero-metrics">
+          <article>
+            <span class="metric-label">Severity</span>
+            <strong id="metricSeverity">-</strong>
+          </article>
+          <article>
+            <span class="metric-label">Open Issues</span>
+            <strong id="metricIssues">0</strong>
+          </article>
+          <article>
+            <span class="metric-label">Context Size</span>
+            <strong id="metricContext">0</strong>
+          </article>
+        </div>
+      </section>
+
+      <section class="activity-panel">
+        <div class="section-heading">
+          <h2>Usage Memory</h2>
+          <span id="activityStatus">loading activity...</span>
+        </div>
+        <div class="activity-grid">
+          <article class="activity-card">
+            <div class="section-heading">
+              <h3>Running Sessions</h3>
+              <span>live</span>
+            </div>
+            <div id="activityRunningList" class="activity-list"></div>
+          </article>
+
+          <article class="activity-card">
+            <div class="section-heading">
+              <h3>Recent Sessions</h3>
+              <span>history</span>
+            </div>
+            <div id="activityRecentList" class="activity-list"></div>
+          </article>
+
+          <article class="activity-card">
+            <div class="section-heading">
+              <h3>Projects In Use</h3>
+              <span>where memory is active</span>
+            </div>
+            <div id="activityProjectsList" class="activity-list"></div>
+          </article>
+        </div>
+      </section>
+
+      <section class="canvas-panel">
+        <div class="section-heading">
+          <h2>Memory Graph</h2>
+          <span id="graphHint">drag node, pan canvas, wheel to zoom</span>
+        </div>
+        <div class="graph-toolbar">
+          <button id="graphPinMode" type="button">Pin Mode Off</button>
+          <button id="graphClearSelection" type="button">Clear Selection</button>
+          <button id="graphZoomIn" type="button">Zoom In</button>
+          <button id="graphZoomOut" type="button">Zoom Out</button>
+          <button id="graphRecenter" type="button">Recenter</button>
+          <button id="graphResetView" type="button">Show All</button>
+          <button id="graphReleasePins" type="button">Release Pins</button>
+        </div>
+        <div class="graph-controls">
+          <label class="graph-control">
+            <span>Scope</span>
+            <select id="graphScope">
+              <option value="auto" selected>Auto</option>
+              <option value="global">Global</option>
+              <option value="local">Local</option>
+            </select>
+          </label>
+          <label class="graph-control">
+            <span>Depth</span>
+            <select id="graphDepth">
+              <option value="1" selected>1 hop</option>
+              <option value="2">2 hops</option>
+              <option value="3">3 hops</option>
+            </select>
+          </label>
+          <label class="graph-control">
+            <span>Labels</span>
+            <select id="graphLabelMode">
+              <option value="smart" selected>Smart</option>
+              <option value="selected">Selected</option>
+              <option value="all">All</option>
+            </select>
+          </label>
+          <label class="graph-toggle">
+            <input id="graphHideIsolated" type="checkbox">
+            <span>Hide isolated</span>
+          </label>
+        </div>
+        <div id="graphTypeFilters" class="graph-type-filters"></div>
+        <div class="brain-layout">
+          <div class="brain-sidebar">
+            <article class="brain-card brain-card-focus">
+              <p class="eyebrow">Graph Lens</p>
+              <h3 id="brainModeTitle">Global Atlas</h3>
+              <p id="brainModeSummary" class="brain-copy">
+                Chọn một node để xem chuỗi project, file, lỗi và lần sửa liên quan.
+              </p>
+              <div id="brainBreadcrumbs" class="brain-breadcrumbs"></div>
+            </article>
+
+            <article class="brain-card">
+              <div class="section-heading">
+                <h2>Brain Summary</h2>
+                <span id="brainStatsLabel">0 links</span>
+              </div>
+              <div id="brainInsights" class="brain-insights"></div>
+            </article>
+
+            <article class="brain-card">
+              <div class="section-heading">
+                <h2>Trace Path</h2>
+                <span>project -> file -> issue -> edit</span>
+              </div>
+              <div id="brainTrace" class="brain-trace"></div>
+            </article>
+
+            <article class="brain-card">
+              <div class="section-heading">
+                <h2>Legend</h2>
+                <span>typed nodes + edges</span>
+              </div>
+              <div id="brainLegend" class="brain-legend"></div>
+            </article>
+          </div>
+
+          <div id="graphViewport" class="graph-viewport">
+            <div id="graphScene" class="graph-scene">
+              <svg id="graphEdges" class="graph-edges"></svg>
+              <div id="graphNodes" class="graph-nodes"></div>
+            </div>
+            <div class="graph-minimap">
+              <div class="graph-minimap-head">Navigator</div>
+              <div id="graphMinimap" class="graph-minimap-canvas"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="storage-panel">
+        <div class="section-heading">
+          <h2>Storage Control</h2>
+          <span id="storageStatus">loading storage...</span>
+        </div>
+        <div class="storage-grid">
+          <article class="storage-card">
+            <small>Database</small>
+            <p id="storageDbPath">-</p>
+          </article>
+          <article class="storage-card">
+            <small>Exports</small>
+            <p id="storageExportsDir">-</p>
+          </article>
+          <article class="storage-card">
+            <small>Backups</small>
+            <p id="storageBackupsDir">-</p>
+          </article>
+        </div>
+        <div class="storage-actions">
+          <button id="crawlProjectsButton" type="button">Crawl Projects</button>
+          <button id="repairGraphButton" type="button">Repair Links</button>
+          <button id="openExportsButton" type="button">Open Exports</button>
+          <button id="openBackupsButton" type="button">Open Backups</button>
+          <button id="exportButton" type="button">Export JSON</button>
+          <button id="backupButton" type="button">Backup DB</button>
+          <button id="restoreLatestBackupButton" type="button">Restore Latest Backup</button>
+        </div>
+        <form id="importForm" class="import-form">
+          <label>
+            <span>Import path</span>
+            <input id="importPathInput" type="text" placeholder="C:\Users\DELL\.graph-memory\exports\graph-export.json">
+          </label>
+          <label>
+            <span>Mode</span>
+            <select id="importModeInput">
+              <option value="replace">replace</option>
+              <option value="merge">merge</option>
+            </select>
+          </label>
+          <button type="submit">Import Graph</button>
+        </form>
+        <form id="crawlForm" class="import-form">
+          <label>
+            <span>Crawl root</span>
+            <input id="crawlRootInput" type="text" placeholder="C:\Users\DELL\OneDrive\Desktop\sang kein">
+          </label>
+          <label>
+            <span>Max depth</span>
+            <select id="crawlDepthInput">
+              <option value="2">2</option>
+              <option value="3" selected>3</option>
+              <option value="4">4</option>
+            </select>
+          </label>
+          <button type="submit">Run Crawl</button>
+        </form>
+        <div class="storage-lists">
+          <article class="storage-list-card">
+            <div class="section-heading">
+              <h2>Recent Exports</h2>
+              <span>latest JSON files</span>
+            </div>
+            <div id="recentExportsList" class="storage-list"></div>
+          </article>
+          <article class="storage-list-card">
+            <div class="section-heading">
+              <h2>Recent Backups</h2>
+              <span>latest DB snapshots</span>
+            </div>
+            <div id="recentBackupsList" class="storage-list"></div>
+          </article>
+        </div>
+        <div id="storageFeedback" class="storage-feedback"></div>
+      </section>
+
+      <section class="panel-grid">
+        <article class="panel">
+          <div class="section-heading">
+            <h2>Context Window</h2>
+            <span id="contextWindowCount">0 mục</span>
+          </div>
+          <div id="contextWindow" class="context-window"></div>
+        </article>
+
+        <article class="panel">
+          <div class="section-heading">
+            <h2>Debug Signals</h2>
+            <span>trace, stack, symptom</span>
+          </div>
+          <div id="debugSignals" class="debug-signals"></div>
+        </article>
+
+        <article class="panel">
+          <div class="section-heading">
+            <h2>Chat History</h2>
+            <span>user + assistant notes</span>
+          </div>
+          <div id="chatHistory" class="chat-history"></div>
+        </article>
+
+        <article class="panel">
+          <div class="section-heading">
+            <h2>Action Composer</h2>
+            <span>ghi chú vào node đang chọn</span>
+          </div>
+          <form id="noteForm" class="note-form">
+            <label>
+              <span>Ghi chú mới</span>
+              <textarea id="noteInput" rows="4" placeholder="Ghi lại phát hiện mới, hướng debug, hoặc quyết định sửa lỗi..."></textarea>
+            </label>
+            <button type="submit">Lưu vào node</button>
+          </form>
+        </article>
+      </section>
+    </main>
+  </div>
+
+  <script src="./app.js"></script>
+</body>
+</html>

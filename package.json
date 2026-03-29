@@ -1,0 +1,16 @@
+{
+  "name": "graph-memory-api",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "cli": "node graph-cli.js",
+    "watcher": "node activity-watcher.js",
+    "boot": "powershell -ExecutionPolicy Bypass -File .\\boot-graph-memory.ps1",
+    "startup:install": "powershell -ExecutionPolicy Bypass -File .\\install-graph-startup.ps1"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.28.0",
+    "zod": "^4.3.6"
+  }
+}

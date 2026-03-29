@@ -1,0 +1,99 @@
+{
+  "name": "graph-memory-vscode",
+  "displayName": "Graph Memory",
+  "description": "Trace file and diagnostics into Graph Memory nodes for debugging context.",
+  "version": "0.1.0",
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:graphMemory.sidebar",
+    "onCommand:graphMemory.refresh",
+    "onCommand:graphMemory.traceActiveFile",
+    "onCommand:graphMemory.captureDiagnostic",
+    "onCommand:graphMemory.startTracking",
+    "onCommand:graphMemory.stopTracking"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "graphMemory",
+          "title": "Graph Memory",
+          "icon": "media/graph.svg"
+        }
+      ]
+    },
+    "views": {
+      "graphMemory": [
+        {
+          "type": "webview",
+          "id": "graphMemory.sidebar",
+          "name": "Debug Context"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "graphMemory.refresh",
+        "title": "Graph Memory: Refresh Context"
+      },
+      {
+        "command": "graphMemory.traceActiveFile",
+        "title": "Graph Memory: Trace Active File"
+      },
+      {
+        "command": "graphMemory.captureDiagnostic",
+        "title": "Graph Memory: Add Current Error To Graph"
+      },
+      {
+        "command": "graphMemory.startTracking",
+        "title": "Graph Memory: Start Tracking Workspace"
+      },
+      {
+        "command": "graphMemory.stopTracking",
+        "title": "Graph Memory: Stop Tracking Workspace"
+      }
+    ],
+    "configuration": {
+      "title": "Graph Memory",
+      "properties": {
+        "graphMemory.baseUrl": {
+          "type": "string",
+          "default": "http://localhost:3010",
+          "description": "Base URL of the Graph Memory API server."
+        },
+        "graphMemory.autoTraceOnEditorChange": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically trace Graph Memory context when the active editor changes."
+        },
+        "graphMemory.autoCreateNodeOnMiss": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically create a Graph Memory node when no matching node is found for the active file."
+        },
+        "graphMemory.autoSyncDiagnostics": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically sync the current top diagnostic into Graph Memory if it is not already captured."
+        },
+        "graphMemory.autoTrackWorkspace": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically track the current VS Code workspace as an active Graph Memory session."
+        },
+        "graphMemory.autoTrackHeartbeatMs": {
+          "type": "number",
+          "default": 30000,
+          "description": "Heartbeat interval in milliseconds when workspace tracking is active."
+        }
+      }
+    }
+  }
+}
