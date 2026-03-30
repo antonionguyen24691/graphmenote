@@ -4,6 +4,7 @@ const path = require("node:path");
 const { URL } = require("node:url");
 const db = require("./db");
 const { crawlProjects } = require("./crawler");
+const { scanDirectoryTree, scanProjectSchema } = require("./scanner");
 
 const PORT = Number(process.env.PORT || 3010);
 const ROOT = __dirname;
@@ -12,6 +13,7 @@ const STATIC_FILES = {
   "/index.html": "index.html",
   "/styles.css": "styles.css",
   "/app.js": "app.js",
+  "/pipeline.js": "pipeline.js",
 };
 
 const server = http.createServer(async (req, res) => {
@@ -211,6 +213,101 @@ async function handleApi(req, res, requestUrl) {
         error: "repair_graph_failed",
         message: error.message,
       });
+    }
+  }
+
+  if (method === "GET" && requestUrl.pathname === "/api/scan-tree") {
+    const scanPath = (requestUrl.searchParams.get("path") || "").trim();
+    const maxDepth = Number(requestUrl.searchParams.get("maxDepth") || 6);
+    if (!scanPath) {
+      return sendJson(res, 400, { error: "missing_path", message: "path la bat buoc." });
+    }
+    try {
+      const tree = scanDirectoryTree(scanPath, maxDepth);
+      return sendJson(res, 200, { tree });
+    } catch (error) {
+      return sendJson(res, 400, { error: "scan_tree_failed", message: error.message });
+    }
+  }
+
+  if (method === "GET" && requestUrl.pathname === "/api/scan-schema") {
+    const scanPath = (requestUrl.searchParams.get("path") || "").trim();
+    if (!scanPath) {
+      return sendJson(res, 400, { error: "missing_path", message: "path la bat buoc." });
+    }
+    try {
+      const schema = scanProjectSchema(scanPath);
+      return sendJson(res, 200, schema);
+    } catch (error) {
+      return sendJson(res, 400, { error: "scan_schema_failed", message: error.message });
+    }
+  }
+
+  if (method === "POST" && requestUrl.pathname === "/api/scan-to-graph") {
+    const body = await readBody(req);
+    const scanPath = (body.path || "").trim();
+    if (!scanPath) {
+      return sendJson(res, 400, { error: "missing_path", message: "path la bat buoc." });
+    }
+    try {
+      const schema = scanProjectSchema(scanPath);
+      const graphNodes = schema.tables.map((table) => {
+        const nodeId = `schema-${table.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+        const fieldsSummary = table.fields.map((f) => `${f.isPrimaryKey ? "🔑" : f.isForeignKey ? "🔗" : ""} ${f.name}: ${f.type}`).join(", ");
+        return {
+          id: nodeId,
+          name: table.name,
+          type: "schema",
+          summary: `Table ${table.name} with ${table.fields.length} fields. [${fieldsSummary}]`,
+          severity: "low",
+          files: [table.sourceFile || scanPath],
+          relations: [],
+          contextWindow: table.fields.map((f) => ({ label: f.name, detail: `${f.type}${f.isPrimaryKey ? " (PK)" : ""}${f.isForeignKey ? " (FK)" : ""}${f.nullable ? " nullable" : ""}` })),
+          debugSignals: [],
+          chatHistory: [],
+          notes: [`Schema node auto-created from scanning ${scanPath}`],
+          openIssues: 0,
+        };
+      });
+
+      let added = 0;
+      let updated = 0;
+      graphNodes.forEach((gNode) => {
+        const existing = db.getNode(gNode.id);
+        if (existing) {
+          updated += 1;
+        } else {
+          try {
+            db.createNode(gNode);
+            added += 1;
+          } catch { updated += 1; }
+        }
+      });
+
+      schema.relations.forEach((rel) => {
+        const sourceId = `schema-${rel.sourceTable.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+        const targetId = `schema-${rel.targetTable.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+        const sourceNode = db.getNode(sourceId);
+        const targetNode = db.getNode(targetId);
+        if (sourceNode && targetNode) {
+          if (!sourceNode.relations.includes(targetId)) {
+            sourceNode.relations.push(targetId);
+          }
+          if (!targetNode.relations.includes(sourceId)) {
+            targetNode.relations.push(sourceId);
+          }
+        }
+      });
+
+      return sendJson(res, 200, {
+        added,
+        updated,
+        totalTables: schema.tables.length,
+        totalRelations: schema.relations.length,
+        schema,
+      });
+    } catch (error) {
+      return sendJson(res, 400, { error: "scan_to_graph_failed", message: error.message });
     }
   }
 

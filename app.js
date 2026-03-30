@@ -124,6 +124,65 @@ graphViewport.addEventListener("pointerdown", handleViewportPointerDown);
 window.addEventListener("pointermove", handlePointerMove);
 window.addEventListener("pointerup", handlePointerUp);
 
+const graphFullscreen = document.getElementById("graphFullscreen");
+graphFullscreen.addEventListener("click", () => toggleCanvasFullscreen("graph"));
+
+window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    document.querySelectorAll(".is-fullscreen").forEach((el) => {
+      el.classList.remove("is-fullscreen");
+    });
+    document.querySelectorAll(".btn-fullscreen").forEach((btn) => {
+      btn.textContent = "⛶ Fullscreen";
+    });
+  }
+});
+
+function toggleCanvasFullscreen(target) {
+  let panel, btn;
+  if (target === "graph") {
+    panel = document.querySelector(".canvas-panel");
+    btn = graphFullscreen;
+  } else if (target === "pipeline") {
+    panel = document.getElementById("pipelinePanel");
+    btn = document.getElementById("pipelineFullscreen");
+  }
+  if (!panel) return;
+
+  const isNowFull = panel.classList.toggle("is-fullscreen");
+  btn.textContent = isNowFull ? "✕ Exit Fullscreen" : "⛶ Fullscreen";
+}
+
+/* expose for pipeline.js */
+window.toggleCanvasFullscreen = toggleCanvasFullscreen;
+
+/* ── Tab Switching ───────────────────────────────────────────── */
+const tabButtons = document.querySelectorAll(".ws-tab");
+const tabContents = document.querySelectorAll(".tab-content");
+
+tabButtons.forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const targetTab = btn.getAttribute("data-tab");
+
+    tabButtons.forEach((b) => b.classList.remove("is-active"));
+    tabContents.forEach((tc) => tc.classList.remove("is-active"));
+
+    btn.classList.add("is-active");
+
+    if (targetTab === "graph") {
+      document.getElementById("tabContentGraph").classList.add("is-active");
+    } else if (targetTab === "pipeline") {
+      document.getElementById("tabContentPipeline").classList.add("is-active");
+    }
+  });
+});
+
+/* expose for pipeline.js graph reload */
+window.syncGraphState = async function () {
+  await loadGraph();
+  setActiveNode(store.activeNodeId);
+};
+
 bootstrap();
 
 async function bootstrap() {
