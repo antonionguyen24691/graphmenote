@@ -5,12 +5,194 @@ const db = require("./db");
 
 const server = new McpServer({
   name: "graph-memory",
-  version: "1.1.0",
+  version: "2.0.0",
 });
+
+/* ────────────────────────────────────────────────────────────────────────────
+   SESSION BOOTSTRAP — THE MOST IMPORTANT TOOL
+   AI models MUST call this FIRST when starting any task in a workspace.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+server.tool(
+  "session_bootstrap",
+  `[MANDATORY — CALL THIS FIRST] Initialize your session and get workspace context in one call.
+This is the FIRST tool you should call when starting ANY task. It will:
+1. Start or resume an activity session for this workspace
+2. Return recent edits, open errors, and last touched files from the past 7 days
+3. Give you a runId to use with record_outcome when your task is done
+
+WHY: This saves you from reading the entire codebase. You instantly know what was done before, what errors are pending, and which files were recently changed.
+
+WHEN TO CALL: At the very start of every conversation/task, before reading any files.
+WHEN NOT TO CALL: Never skip this. Always call it first.`,
+  {
+    workspacePath: z.string().describe("Absolute path to the workspace/project root directory"),
+    toolSource: z.string().optional().describe("Your tool name: 'antigravity', 'codex', 'cursor', 'claude', 'windsurf', or 'cli'"),
+  },
+  async ({ workspacePath, toolSource }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(db.sessionBootstrap(workspacePath, toolSource || "agent"), null, 2),
+      },
+    ],
+  })
+);
+
+/* ────────────────────────────────────────────────────────────────────────────
+   GET CONTEXT FOR FILE — One-call file context retrieval
+   ──────────────────────────────────────────────────────────────────────────── */
+
+server.tool(
+  "get_context_for_file",
+  `[CALL BEFORE EDITING A FILE] Get all known context about specific file(s) from Graph Memory.
+Returns notes, debug signals (past errors), recent edits, and related nodes — only for the files you specify.
+
+WHY: Instead of reading the entire codebase, call this to instantly know:
+- What errors were previously found in this file
+- What edits were made recently
+- What notes/context exist about this file
+- What other files/nodes are related
+
+WHEN TO CALL: Before you start reading or editing any file. This gives you pre-existing knowledge.
+EXAMPLE: Before fixing a bug in "src/auth/index.ts", call this with that file path.`,
+  {
+    filePaths: z.union([z.string(), z.array(z.string())]).describe("One file path or array of file paths to get context for"),
+  },
+  async ({ filePaths }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(db.getContextForFiles(filePaths), null, 2),
+      },
+    ],
+  })
+);
+
+/* ────────────────────────────────────────────────────────────────────────────
+   RECORD OUTCOME — Finalize your session and persist what you did
+   ──────────────────────────────────────────────────────────────────────────── */
+
+server.tool(
+  "record_outcome",
+  `[CALL WHEN TASK IS DONE] Record the outcome of your work session.
+This finalizes your activity session and creates edit/error nodes in the graph for future reference.
+
+WHY: This is how future AI sessions know what was done before. Without this, your work is invisible to future agents.
+
+WHEN TO CALL: When you finish a task (success or failure), before ending the conversation.
+WHAT TO INCLUDE:
+- runId: from session_bootstrap
+- status: "completed" or "failed"
+- touchedFiles: list of files you created/modified
+- summary: what you accomplished
+- fixedErrors: (optional) list of error node IDs you resolved`,
+  {
+    runId: z.string().describe("The run ID from session_bootstrap"),
+    status: z.enum(["completed", "failed", "stopped"]).optional().describe("Final status of your task"),
+    summary: z.string().optional().describe("Summary of what you accomplished or why it failed"),
+    touchedFiles: z.array(z.string()).optional().describe("List of file paths you created, modified, or deleted"),
+    currentFile: z.string().optional().describe("Last file you were working on"),
+    latestError: z.string().optional().describe("Error message if status is 'failed'"),
+    fixedErrors: z.array(z.string()).optional().describe("List of error node IDs that you resolved"),
+  },
+  async ({ runId, status, summary, touchedFiles, currentFile, latestError, fixedErrors }) => {
+    const result = db.finishActivity(runId, {
+      status: status || "completed",
+      summary,
+      touchedFiles,
+      currentFile,
+      latestError,
+    });
+
+    if (!result) {
+      return {
+        isError: true,
+        content: [{ type: "text", text: `Run not found: ${runId}` }],
+      };
+    }
+
+    if (Array.isArray(fixedErrors) && fixedErrors.length) {
+      fixedErrors.forEach(errorNodeId => {
+        const errorNode = db.getNode(errorNodeId);
+        if (errorNode) {
+          db.addNote(errorNodeId, `Resolved by ${result.toolSource || "agent"} in session ${runId}. ${summary || ""}`);
+        }
+      });
+    }
+
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
+  }
+);
+
+/* ────────────────────────────────────────────────────────────────────────────
+   RECORD EDIT — Log a specific file edit with context
+   ──────────────────────────────────────────────────────────────────────────── */
+
+server.tool(
+  "record_edit",
+  `[CALL AFTER MODIFYING A FILE] Record that you edited a specific file, with a summary of the change.
+Creates an edit node in the graph so future AI sessions can see what was changed and why.
+
+WHY: This builds institutional memory. Next time any AI works on this file, it will see your edit history.
+
+WHEN TO CALL: After you make a significant edit to a file. Not needed for trivial formatting changes.`,
+  {
+    file: z.string().describe("Absolute path of the edited file"),
+    summary: z.string().optional().describe("What you changed and why"),
+    toolSource: z.string().optional().describe("Tool name: 'antigravity', 'codex', 'cursor', etc."),
+    note: z.string().optional().describe("Additional context about the edit"),
+  },
+  async ({ file, summary, toolSource, note }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(db.recordEdit({ file, summary, toolSource, note }), null, 2),
+      },
+    ],
+  })
+);
+
+/* ────────────────────────────────────────────────────────────────────────────
+   RECORD ERROR — Log an error with location and symptom
+   ──────────────────────────────────────────────────────────────────────────── */
+
+server.tool(
+  "record_error",
+  `[CALL WHEN YOU ENCOUNTER AN ERROR] Record a specific error, bug, or diagnostic with its file location and symptoms.
+Creates an error node so future AI sessions can see what went wrong and where.
+
+WHY: Errors tend to recur. Recording them means the next AI can instantly see "this file had this error before" instead of debugging from scratch.
+
+WHEN TO CALL: When you encounter or diagnose an error during your work.`,
+  {
+    file: z.string().describe("File path where the error occurred"),
+    location: z.string().describe("Specific location, e.g., 'src/auth/index.ts:42' or function name"),
+    symptom: z.string().describe("The error message, stack trace, or description of the problem"),
+    title: z.string().optional().describe("Short title for this error"),
+    severity: z.string().optional().describe("'high', 'medium', or 'low'"),
+    toolSource: z.string().optional().describe("Tool name that found this error"),
+  },
+  async ({ file, location, symptom, title, severity, toolSource }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(db.recordError({ file, location, symptom, title, severity, toolSource }), null, 2),
+      },
+    ],
+  })
+);
+
+/* ────────────────────────────────────────────────────────────────────────────
+   EXISTING TOOLS — with improved descriptions
+   ──────────────────────────────────────────────────────────────────────────── */
 
 server.tool(
   "get_graph",
-  "Get the entire Graph Memory database. Only use if absolutely necessary, as this can be large.",
+  `Get the entire Graph Memory database. WARNING: This can be very large.
+Only use this if you specifically need the complete graph. For most tasks, use session_bootstrap or get_context_for_file instead.`,
   {},
   async () => ({
     content: [{ type: "text", text: JSON.stringify(db.getGraph(), null, 2) }],
@@ -19,7 +201,7 @@ server.tool(
 
 server.tool(
   "storage_info",
-  "Get the local persistent storage path for the shared Graph Memory database on this machine.",
+  "Get the local persistent storage path and stats for the shared Graph Memory database on this machine.",
   {},
   async () => ({
     content: [{ type: "text", text: JSON.stringify(db.getStorageInfo(), null, 2) }],
@@ -28,7 +210,8 @@ server.tool(
 
 server.tool(
   "activity_overview",
-  "Get current running sessions and recent usage of the shared Graph Memory across projects and tools.",
+  `Get current running sessions, recent activity, and project usage stats.
+Use this to see what's happening across all projects. For workspace-specific context, use session_bootstrap instead.`,
   {},
   async () => ({
     content: [{ type: "text", text: JSON.stringify(db.getActivityOverview(), null, 2) }],
@@ -37,7 +220,7 @@ server.tool(
 
 server.tool(
   "start_activity",
-  "Register that a tool started working in a workspace so future agents can see current progress.",
+  `Register that a tool started working in a workspace. For most cases, use session_bootstrap instead — it does this automatically plus returns context.`,
   {
     workspacePath: z.string().describe("Absolute path to the workspace root"),
     toolSource: z.string().optional().describe("Tool name such as codex, vscode, antigravity, cli"),
@@ -57,7 +240,7 @@ server.tool(
 
 server.tool(
   "heartbeat_activity",
-  "Update the current state of an active workspace session.",
+  "Update the current state of an active workspace session. Use to report progress during long tasks.",
   {
     runId: z.string().describe("The activity run ID"),
     summary: z.string().optional().describe("Latest summary"),
@@ -82,7 +265,7 @@ server.tool(
 
 server.tool(
   "finish_activity",
-  "Mark an active workspace session as completed, failed, or stopped.",
+  `Mark an active workspace session as completed, failed, or stopped. For most cases, use record_outcome instead — it also handles edit/error recording.`,
   {
     runId: z.string().describe("The activity run ID"),
     status: z.enum(["completed", "failed", "stopped"]).optional().describe("Final status"),
@@ -141,7 +324,8 @@ server.tool(
 
 server.tool(
   "search_graph",
-  "Search the graph for nodes matching a specific query string. Matches against names, summaries, files, chat history, and debug signals.",
+  `Search the graph for nodes matching a query. Matches against names, summaries, files, chat history, and debug signals.
+Use this when you need to find nodes by keyword. For file-specific context, use get_context_for_file instead.`,
   {
     query: z.string().describe("The search query string"),
   },
@@ -165,7 +349,7 @@ server.tool(
 
 server.tool(
   "get_node",
-  "Get detailed information about a specific node by its ID.",
+  "Get detailed information about a specific node by its ID. Use after search_graph or trace_node to get full details.",
   {
     nodeId: z.string().describe("The ID of the node to retrieve"),
   },
@@ -186,7 +370,8 @@ server.tool(
 
 server.tool(
   "trace_node",
-  "Find nodes related to a specific file or diagnostic location.",
+  `Find nodes related to a specific file path or diagnostic location. Returns matching nodes from the graph.
+Use this when you have a file with an error and want to find related knowledge in the graph.`,
   {
     file: z.string().optional().describe("File path substring to match against node files"),
     location: z.string().optional().describe("Diagnostic location substring to match against debug signals"),
@@ -215,7 +400,7 @@ server.tool(
 
 server.tool(
   "upsert_node",
-  "Automatically create or fetch a node from an editor trace or file path.",
+  "Automatically create or fetch a node from an editor trace or file path. Creates if not exists, updates debug signals if provided.",
   {
     file: z.string().describe("The primary file associated with this context"),
     location: z.string().optional().describe("The location of the diagnostic"),
@@ -242,7 +427,8 @@ server.tool(
 
 server.tool(
   "add_note",
-  "Append a new thought, discovery, or quick note to a specific node.",
+  `[CALL TO SAVE KNOWLEDGE] Append a thought, discovery, or quick note to a specific node.
+Use this to persist insights you discover during your work — future AI sessions will see these notes.`,
   {
     nodeId: z.string().describe("The ID of the node"),
     note: z.string().describe("The note text to append"),
@@ -264,7 +450,8 @@ server.tool(
 
 server.tool(
   "add_debug_signal",
-  "Attach a specific error, stack trace, or diagnostic symptom to a node.",
+  `[CALL ON ERROR] Attach an error, stack trace, or diagnostic symptom to a node.
+Use this when you discover an error associated with an existing node.`,
   {
     nodeId: z.string().describe("The ID of the node"),
     title: z.string().describe("Short title"),
@@ -289,8 +476,9 @@ server.tool(
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("Graph Memory MCP Server running on stdio");
+  console.error("Graph Memory MCP Server v2.0.0 running on stdio");
   console.error(`SQLite storage: ${db.getStorageInfo().dbPath}`);
+  console.error(`Tools: session_bootstrap, get_context_for_file, record_outcome, record_edit, record_error + 15 existing`);
 }
 
 main().catch((error) => {

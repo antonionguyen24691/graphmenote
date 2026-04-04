@@ -1824,6 +1824,170 @@ function buildContextMetrics(nodes) {
   );
 }
 
+function getContextForFiles(filePaths) {
+  const paths = (Array.isArray(filePaths) ? filePaths : [filePaths]).filter(Boolean).map(p => String(p).trim());
+  if (!paths.length) {
+    return { files: [], nodes: [], recentEdits: [], openErrors: [], relatedNodes: [] };
+  }
+
+  const allNodes = listNodes();
+  const matchedNodes = [];
+  const seen = new Set();
+
+  paths.forEach(filePath => {
+    const normalizedFile = filePath.toLowerCase();
+    allNodes.forEach(node => {
+      if (seen.has(node.id)) return;
+      if (node.files.some(f => f.toLowerCase().includes(normalizedFile) || normalizedFile.includes(f.toLowerCase()))) {
+        seen.add(node.id);
+        matchedNodes.push(node);
+      }
+    });
+  });
+
+  const recentEdits = allNodes
+    .filter(n => n.type === "edit" && paths.some(fp => n.files.some(f => f.toLowerCase().includes(fp.toLowerCase()))))
+    .sort((a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime())
+    .slice(0, 10)
+    .map(n => ({
+      id: n.id,
+      file: n.files[0] || "",
+      summary: n.summary,
+      notes: n.notes.slice(0, 3),
+      updatedAt: n.updatedAt,
+    }));
+
+  const openErrors = allNodes
+    .filter(n => n.type === "error" && n.openIssues > 0 && paths.some(fp => n.files.some(f => f.toLowerCase().includes(fp.toLowerCase()))))
+    .sort((a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime())
+    .slice(0, 10)
+    .map(n => ({
+      id: n.id,
+      file: n.files[0] || "",
+      summary: n.summary,
+      severity: n.severity,
+      debugSignals: n.debugSignals.slice(0, 3),
+      updatedAt: n.updatedAt,
+    }));
+
+  const relatedIds = new Set();
+  matchedNodes.forEach(n => {
+    (n.relations || []).forEach(rid => {
+      if (!seen.has(rid)) relatedIds.add(rid);
+    });
+    if (n.parentId && !seen.has(n.parentId)) relatedIds.add(n.parentId);
+  });
+
+  const relatedNodes = [...relatedIds]
+    .map(id => getNode(id))
+    .filter(Boolean)
+    .slice(0, 8)
+    .map(n => ({
+      id: n.id,
+      name: n.name,
+      type: n.type,
+      summary: n.summary,
+      files: n.files.slice(0, 3),
+    }));
+
+  const compactNodes = matchedNodes.map(n => ({
+    id: n.id,
+    name: n.name,
+    type: n.type,
+    summary: n.summary,
+    severity: n.severity,
+    notes: n.notes.slice(0, 5),
+    debugSignals: n.debugSignals.slice(0, 5),
+    contextWindow: n.contextWindow.slice(0, 5),
+    openIssues: n.openIssues,
+    updatedAt: n.updatedAt,
+  }));
+
+  return {
+    files: paths,
+    nodes: compactNodes,
+    recentEdits,
+    openErrors,
+    relatedNodes,
+  };
+}
+
+function sessionBootstrap(workspacePath, toolSource = "agent") {
+  const normalizedPath = normalizeWorkspacePath(workspacePath);
+  if (!normalizedPath) {
+    throw new Error("workspacePath la bat buoc.");
+  }
+
+  const existingRunning = listActivityRuns({ status: "running", workspacePath: normalizedPath, limit: 1 });
+  let run;
+  if (existingRunning.length) {
+    run = existingRunning[0];
+    heartbeatActivity(run.id, { message: `Session resumed by ${toolSource}` });
+  } else {
+    run = startActivity({
+      workspacePath: normalizedPath,
+      toolSource: normalizeToolSource(toolSource),
+      summary: `Session started by ${toolSource}`,
+    });
+  }
+
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const allNodes = listNodes();
+
+  const recentEdits = allNodes
+    .filter(n => n.type === "edit" && n.updatedAt >= sevenDaysAgo && n.files.some(f => normalizeWorkspacePath(f).toLowerCase().startsWith(normalizedPath.toLowerCase())))
+    .sort((a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime())
+    .slice(0, 15)
+    .map(n => ({
+      id: n.id,
+      file: n.files[0] || "",
+      summary: n.summary,
+      updatedAt: n.updatedAt,
+    }));
+
+  const openErrors = allNodes
+    .filter(n => n.type === "error" && n.openIssues > 0 && n.files.some(f => normalizeWorkspacePath(f).toLowerCase().startsWith(normalizedPath.toLowerCase())))
+    .sort((a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime())
+    .slice(0, 10)
+    .map(n => ({
+      id: n.id,
+      file: n.files[0] || "",
+      summary: n.summary,
+      severity: n.severity,
+      debugSignals: n.debugSignals.slice(0, 2),
+      updatedAt: n.updatedAt,
+    }));
+
+  const lastTouchedFiles = [...new Set(recentEdits.map(e => e.file).filter(Boolean))].slice(0, 20);
+
+  const recentSessions = listActivityRuns({ workspacePath: normalizedPath, limit: 5 })
+    .map(s => ({
+      id: s.id,
+      status: s.status,
+      toolSource: s.toolSource,
+      summary: s.summary,
+      startedAt: s.startedAt,
+      endedAt: s.endedAt,
+    }));
+
+  return {
+    runId: run.id,
+    workspacePath: normalizedPath,
+    projectId: run.projectId || null,
+    projectName: run.projectName || path.basename(normalizedPath),
+    isResumed: existingRunning.length > 0,
+    recentWork: {
+      edits: recentEdits,
+      editCount: recentEdits.length,
+      openErrors,
+      errorCount: openErrors.length,
+    },
+    lastTouchedFiles,
+    recentSessions,
+    hint: "Use get_context_for_file with specific file paths to get detailed context. Use record_outcome when your task is done.",
+  };
+}
+
 function timestampForFile() {
   return new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-");
 }
@@ -1865,6 +2029,7 @@ module.exports = {
   finishActivity,
   getActivityOverview,
   getActivityRun,
+  getContextForFiles,
   getContextGraph,
   getGraph,
   getNode,
@@ -1880,6 +2045,7 @@ module.exports = {
   mergeCrawledNodes,
   sanitizeId,
   searchNodes,
+  sessionBootstrap,
   setActiveNode,
   startActivity,
   traceNodes,
