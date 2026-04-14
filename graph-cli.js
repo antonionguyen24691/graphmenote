@@ -23,6 +23,20 @@ async function main() {
       print(await client.getStorageInfo());
       return;
 
+    case "vault-config":
+      print(await client.getVaultConfig());
+      return;
+
+    case "vault-set":
+      ensure(args[0], "Can truyen rootPath.");
+      print(await client.setVaultConfig(args[0]));
+      return;
+
+    case "vault-scaffold":
+      ensure(args[0], "Can truyen rootPath.");
+      print(await client.scaffoldVault(args[0]));
+      return;
+
     case "activity-overview":
       print(await client.getActivityOverview());
       return;
@@ -76,12 +90,139 @@ async function main() {
       return;
     }
 
+    case "modules":
+      print(await client.findReusableModules(parseFlags(args)));
+      return;
+
+    case "project-match":
+      print(await client.matchProjectToReusableModules({
+        workspacePath: args[0],
+        ...parseFlags(args.slice(1)),
+      }));
+      return;
+
+    case "module-adoptions":
+      print(await client.getModuleAdoptionMemory(parseFlags(args)));
+      return;
+
+    case "module-verifications":
+      print(await client.getModuleVerificationMemory(parseFlags(args)));
+      return;
+
+    case "adoption-recipe":
+      print(await client.getAdoptionRecipe(parseFlags(args)));
+      return;
+
+    case "adoption-execution-assist":
+      print(await client.getAdoptionExecutionAssist(parseFlags(args)));
+      return;
+
+    case "adoption-patch-draft":
+      print(await client.getAdoptionPatchDraft(parseFlags(args)));
+      return;
+
+    case "adoption-apply-preview":
+      print(await client.getAdoptionApplyPreview(normalizeAdoptionApplyFlags(parseFlags(args))));
+      return;
+
+    case "adoption-apply":
+      print(await client.applyAdoptionPatchDraft(normalizeAdoptionApplyFlags(parseFlags(args))));
+      return;
+
+    case "module-register": {
+      const workspacePath = args[0];
+      const entryPath = args[1];
+      const capability = args[2];
+      const name = args.slice(3).join(" ");
+      ensure(workspacePath, "Can truyen workspacePath.");
+      ensure(entryPath, "Can truyen entryPath.");
+      ensure(capability, "Can truyen capability.");
+      print(await client.registerReusableModule({ workspacePath, entryPath, capability, name }));
+      return;
+    }
+
+    case "module-harvest": {
+      const rootPath = args[0];
+      ensure(rootPath, "Can truyen rootPath.");
+      print(await client.harvestReusableModules(rootPath, parseFlags(args.slice(1))));
+      return;
+    }
+
+    case "module-cleanup": {
+      const workspacePath = args[0];
+      ensure(workspacePath, "Can truyen workspacePath.");
+      print(await client.cleanupModuleRegistry(workspacePath, parseFlags(args.slice(1))));
+      return;
+    }
+
+    case "low-token-context":
+      print(await client.getLowTokenContext(parseFlags(args)));
+      return;
+
+    case "implementation-context":
+      print(await client.getImplementationContext(parseFlags(args)));
+      return;
+
+    case "implementation-upsert": {
+      const workspacePath = args[0];
+      const title = args[1];
+      ensure(workspacePath, "Can truyen workspacePath.");
+      ensure(title, "Can truyen title.");
+      const flags = parseFlags(args.slice(2));
+      print(await client.upsertImplementationThread({ workspacePath, title, ...normalizeImplementationFlags(flags) }));
+      return;
+    }
+
+    case "module-adoption-record": {
+      const moduleId = args[0];
+      const targetWorkspacePath = args[1];
+      ensure(moduleId, "Can truyen moduleId.");
+      ensure(targetWorkspacePath, "Can truyen targetWorkspacePath.");
+      const flags = parseFlags(args.slice(2));
+      print(await client.recordModuleAdoption({
+        moduleId,
+        targetWorkspacePath,
+        ...normalizeImplementationFlags(flags),
+      }));
+      return;
+    }
+
+    case "module-verification-record": {
+      const moduleId = args[0];
+      const targetWorkspacePath = args[1];
+      ensure(moduleId, "Can truyen moduleId.");
+      ensure(targetWorkspacePath, "Can truyen targetWorkspacePath.");
+      const flags = parseFlags(args.slice(2));
+      print(await client.recordModuleVerification({
+        moduleId,
+        targetWorkspacePath,
+        ...normalizeImplementationFlags(flags),
+      }));
+      return;
+    }
+
     case "search":
       print(await client.searchNodes(args.join(" ")));
       return;
 
     case "trace":
       print(await client.traceNode(parseFlags(args)));
+      return;
+
+    case "context-window":
+      print(await client.getContextWindow(parseFlags(args)));
+      return;
+
+    case "trace-execution":
+      print(await client.traceExecution(parseFlags(args)));
+      return;
+
+    case "impact-of-change":
+      print(await client.impactOfChange(parseFlags(args)));
+      return;
+
+    case "debug-context":
+      print(await client.getDebugContext(parseFlags(args)));
       return;
 
     case "node":
@@ -206,6 +347,59 @@ function normalizeActivityFlags(flags) {
   return payload;
 }
 
+function normalizeImplementationFlags(flags) {
+  const payload = { ...flags };
+
+  [
+    "touchedFiles",
+    "tags",
+    "adapterChanges",
+    "dependencyChanges",
+    "envChanges",
+    "passedTests",
+    "failedTests",
+    "integrationErrors",
+    "fixPatterns",
+    "verificationNotes",
+  ].forEach((key) => {
+    if (payload[key]) {
+      payload[key] = String(payload[key])
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+    }
+  });
+
+  return payload;
+}
+
+function normalizeAdoptionApplyFlags(flags) {
+  const payload = { ...flags };
+
+  ["roles", "selectedFiles"].forEach((key) => {
+    if (payload[key]) {
+      payload[key] = String(payload[key])
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+    }
+  });
+
+  ["appendExisting", "overwriteExisting", "allowPackageJson", "allowPlaceholders", "apply"].forEach((key) => {
+    if (payload[key] !== undefined) {
+      payload[key] = ["true", "1", "yes", "on"].includes(String(payload[key]).trim().toLowerCase());
+    }
+  });
+
+  if (payload.dependencyVersions) {
+    try {
+      payload.dependencyVersions = JSON.parse(payload.dependencyVersions);
+    } catch {}
+  }
+
+  return payload;
+}
+
 function ensure(value, message) {
   if (!value || !String(value).trim()) {
     throw new Error(message);
@@ -308,6 +502,9 @@ function printHelp() {
 Usage:
   node graph-cli.js graph
   node graph-cli.js storage
+  node graph-cli.js vault-config
+  node graph-cli.js vault-set "C:\\Users\\DELL\\KnowledgeVault"
+  node graph-cli.js vault-scaffold "C:\\Users\\DELL\\KnowledgeVault"
   node graph-cli.js activity-overview
   node graph-cli.js activity-runs --status running
   node graph-cli.js activity-start "C:\\repo" codex Dang debug auth
@@ -316,9 +513,30 @@ Usage:
   node graph-cli.js run "C:\\repo" codex npm run dev
   node graph-cli.js open-folder exports
   node graph-cli.js crawl-projects "C:\\Users\\DELL\\OneDrive\\Desktop\\sang kein" 3
+  node graph-cli.js modules --capability ocr --workspacePath "C:\\repo\\new-app"
+  node graph-cli.js project-match "C:\\repo\\new-app" --query ocr
+  node graph-cli.js module-adoptions --workspacePath "C:\\repo\\new-app"
+  node graph-cli.js module-verifications --workspacePath "C:\\repo\\new-app"
+  node graph-cli.js adoption-recipe --moduleId module-abc --targetWorkspacePath "C:\\repo\\new-app"
+  node graph-cli.js adoption-execution-assist --moduleId module-abc --targetWorkspacePath "C:\\repo\\new-app"
+  node graph-cli.js adoption-patch-draft --moduleId module-abc --targetWorkspacePath "C:\\repo\\new-app"
+  node graph-cli.js adoption-apply-preview --moduleId module-abc --targetWorkspacePath "C:\\repo\\new-app" --appendExisting true
+  node graph-cli.js adoption-apply --moduleId module-abc --targetWorkspacePath "C:\\repo\\new-app" --appendExisting true --allowPackageJson true --dependencyVersions "{\"firebase\":\"^12.0.0\"}"
+  node graph-cli.js module-register "C:\\repo\\stock" "C:\\repo\\stock\\src\\ocr" ocr OCR Module
+  node graph-cli.js module-harvest "C:\\repo\\stock" --maxDepth 5 --maxFiles 300
+  node graph-cli.js module-cleanup "C:\\repo\\stock"
+  node graph-cli.js low-token-context --workspacePath "C:\\repo\\stock" --query ocr
+  node graph-cli.js implementation-context --workspacePath "C:\\repo\\stock"
+  node graph-cli.js implementation-upsert "C:\\repo\\stock" "OCR rollout" --currentStep Wiring upload flow --nextStep Add OCR adapter
+  node graph-cli.js module-adoption-record module-abc "C:\\repo\\new-app" --adoptionType adapt --integrationPattern Wrapped existing service behind local adapter
+  node graph-cli.js module-verification-record module-abc "C:\\repo\\new-app" --passedTests auth smoke test,login flow --integrationErrors Missing FIREBASE_PROJECT_ID --fixPatterns Map FIREBASE_* keys in config/auth.ts
   node graph-cli.js search refresh token
   node graph-cli.js trace --file src/auth/token-store.ts
   node graph-cli.js trace --location src/auth/token-store.ts:88
+  node graph-cli.js context-window --file src/auth/token-store.ts --query token
+  node graph-cli.js trace-execution --nodeId auth-service
+  node graph-cli.js impact-of-change --file src/auth/token-store.ts
+  node graph-cli.js debug-context --file src/auth/token-store.ts --location src/auth/token-store.ts:88
   node graph-cli.js node auth-service
   node graph-cli.js active auth-service
   node graph-cli.js create src/new/module.ts New Module

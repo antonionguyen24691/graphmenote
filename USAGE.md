@@ -344,3 +344,112 @@ Graph Memory duoc thiet ke de tra loi nhanh 4 cau hoi:
 4. Da sua o dau va da luu tri thuc debug chua?
 
 Neu workflow cua ban di qua wrapper, API, MCP hoac extension, thi Graph Memory se dan tro thanh bo nho chung thay vi phai doc lai toan bo context moi lan.
+
+## 12. Part 3 Retrieval (uu tien chat luong + giam token)
+
+Part 3 bo sung bo truy xuat moi de Codex/VS Code/Antigravity co the lay context cuc gon thay vi doc full graph.
+
+### HTTP API
+
+```bash
+curl "http://localhost:3010/api/context-window?query=token&limit=8&maxNodes=12"
+curl "http://localhost:3010/api/trace-execution?entry=src/auth/index.ts&hops=4"
+curl "http://localhost:3010/api/impact-of-change?file=src/auth/token-store.ts&hops=3"
+curl "http://localhost:3010/api/debug-context?query=refresh%20token&limit=8&maxNodes=12&hops=3"
+```
+
+### CLI
+
+```bash
+node graph-cli.js context-window --query token --limit 8 --maxNodes 12
+node graph-cli.js trace-execution --entry src/auth/index.ts --hops 4
+node graph-cli.js impact-of-change --file src/auth/token-store.ts --hops 3
+node graph-cli.js debug-context --query "refresh token" --limit 8 --maxNodes 12 --hops 3
+```
+
+### MCP tools
+
+- `get_context_window`
+- `trace_execution`
+- `impact_of_change`
+- `debug_context`
+
+### Flow khuyen nghi cho agent
+
+1. Goi `debug_context` dau tien de lay top context + trace + impact + recommendedFiles.
+2. Neu can dao sau moi goi them `get_node` hoac source preview.
+3. Sau khi fix, bat buoc ghi lai bang `record_edit`/`record_error` va `record_outcome`.
+
+## 13. Obsidian vault ngoai repo
+
+Dat vault root:
+
+```bash
+node graph-cli.js vault-set "C:\Users\DELL\KnowledgeVault"
+```
+
+Scaffold cau truc vault:
+
+```bash
+node graph-cli.js vault-scaffold "C:\Users\DELL\KnowledgeVault"
+```
+
+Kiem tra config:
+
+```bash
+node graph-cli.js vault-config
+```
+
+Vault nay dung cho:
+
+- `raw/`: nguon goc
+- `projects/`: tong hop tung du an
+- `modules/`: module cards de tai su dung
+- `concepts/`, `sources/`, `analyses/`
+- `index.md`, `log.md`
+
+## 14. Module reuse memory
+
+Dang ky tay mot module reusable:
+
+```bash
+node graph-cli.js module-register "C:\repo\stock" "C:\repo\stock\src\ocr" ocr OCR Module
+```
+
+Harvest tu dong module candidates trong du an:
+
+```bash
+node graph-cli.js module-harvest "C:\repo\stock" --maxDepth 5 --maxFiles 300
+```
+
+Tim module co the tai dung:
+
+```bash
+node graph-cli.js modules --capability ocr --workspacePath "C:\repo\new-app"
+node graph-cli.js modules --query map --workspacePath "C:\repo\new-app"
+```
+
+MCP tool tuong ung:
+
+- `find_reusable_modules`
+- `register_reusable_module`
+- `harvest_reusable_modules`
+
+## 15. Low-token flow cho IDE/CLI
+
+Khi vao mot project moi, uu tien lay bootstrap payload gon:
+
+```bash
+node graph-cli.js low-token-context --workspacePath "C:\repo\stock" --query ocr
+```
+
+Payload nay duoc thiet ke de agent:
+
+1. doc project brief truoc
+2. check reusable module candidates truoc
+3. chi mo recommended files khi can
+4. tranh doc full repo va giam token
+
+MCP tool:
+
+- `low_token_context`

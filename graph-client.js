@@ -52,6 +52,12 @@ function shouldUseLocalFallback(error) {
   }
 
   if (typeof error.status === "number") {
+    if (
+      error.status === 404 &&
+      (error.payload?.error === "not_found" || error.payload?.error === "not found")
+    ) {
+      return true;
+    }
     return false;
   }
 
@@ -88,12 +94,187 @@ function handleLocalRequest(requestPath, options = {}) {
     return contextGraph;
   }
 
+  if (method === "GET" && requestUrl.pathname === "/api/context-window") {
+    return db.getContextWindow({
+      nodeId: (requestUrl.searchParams.get("nodeId") || "").trim(),
+      file: (requestUrl.searchParams.get("file") || "").trim(),
+      location: (requestUrl.searchParams.get("location") || "").trim(),
+      query: (requestUrl.searchParams.get("query") || "").trim(),
+      workspacePath: (requestUrl.searchParams.get("workspacePath") || "").trim(),
+      limit: requestUrl.searchParams.get("limit"),
+    });
+  }
+
+  if (method === "GET" && requestUrl.pathname === "/api/trace-execution") {
+    return db.traceExecution({
+      nodeId: (requestUrl.searchParams.get("nodeId") || "").trim(),
+      file: (requestUrl.searchParams.get("file") || "").trim(),
+      location: (requestUrl.searchParams.get("location") || "").trim(),
+      query: (requestUrl.searchParams.get("query") || "").trim(),
+      workspacePath: (requestUrl.searchParams.get("workspacePath") || "").trim(),
+      limit: requestUrl.searchParams.get("limit"),
+    });
+  }
+
+  if (method === "GET" && requestUrl.pathname === "/api/impact-of-change") {
+    return db.impactOfChange({
+      nodeId: (requestUrl.searchParams.get("nodeId") || "").trim(),
+      file: (requestUrl.searchParams.get("file") || "").trim(),
+      query: (requestUrl.searchParams.get("query") || "").trim(),
+      maxNodes: requestUrl.searchParams.get("maxNodes"),
+    });
+  }
+
+  if (method === "GET" && requestUrl.pathname === "/api/debug-context") {
+    return db.getDebugContext({
+      nodeId: (requestUrl.searchParams.get("nodeId") || "").trim(),
+      file: (requestUrl.searchParams.get("file") || "").trim(),
+      location: (requestUrl.searchParams.get("location") || "").trim(),
+      query: (requestUrl.searchParams.get("query") || "").trim(),
+      workspacePath: (requestUrl.searchParams.get("workspacePath") || "").trim(),
+      limit: requestUrl.searchParams.get("limit"),
+      maxNodes: requestUrl.searchParams.get("maxNodes"),
+    });
+  }
+
   if (method === "GET" && requestUrl.pathname === "/api/storage") {
     return db.getStorageInfo();
   }
 
+  if (method === "GET" && requestUrl.pathname === "/api/vault-config") {
+    return db.getVaultConfig();
+  }
+
+  if (method === "POST" && requestUrl.pathname === "/api/vault-config") {
+    return safelyHandleLocalMutation(() => db.setVaultConfig(body.rootPath), 400, "vault_config_failed");
+  }
+
+  if (method === "POST" && requestUrl.pathname === "/api/vault/scaffold") {
+    return safelyHandleLocalMutation(() => db.scaffoldVault(body.rootPath), 400, "vault_scaffold_failed");
+  }
+
   if (method === "GET" && requestUrl.pathname === "/api/activity/overview") {
     return db.getActivityOverview();
+  }
+
+  if (method === "GET" && requestUrl.pathname === "/api/reusable-modules") {
+    return db.findReusableModules({
+      workspacePath: (requestUrl.searchParams.get("workspacePath") || "").trim(),
+      capability: (requestUrl.searchParams.get("capability") || "").trim(),
+      query: (requestUrl.searchParams.get("query") || "").trim(),
+      limit: requestUrl.searchParams.get("limit"),
+    });
+  }
+
+  if (method === "GET" && requestUrl.pathname === "/api/project-module-match") {
+    return db.matchProjectToReusableModules({
+      workspacePath: (requestUrl.searchParams.get("workspacePath") || "").trim(),
+      capability: (requestUrl.searchParams.get("capability") || "").trim(),
+      query: (requestUrl.searchParams.get("query") || "").trim(),
+      limit: requestUrl.searchParams.get("limit"),
+      includeLegacy: requestUrl.searchParams.get("includeLegacy") === "true",
+    });
+  }
+
+  if (method === "GET" && requestUrl.pathname === "/api/module-adoptions") {
+    return db.getModuleAdoptionMemory({
+      moduleId: (requestUrl.searchParams.get("moduleId") || "").trim(),
+      workspacePath: (requestUrl.searchParams.get("workspacePath") || "").trim(),
+      targetWorkspacePath: (requestUrl.searchParams.get("targetWorkspacePath") || "").trim(),
+      sourceWorkspacePath: (requestUrl.searchParams.get("sourceWorkspacePath") || "").trim(),
+      query: (requestUrl.searchParams.get("query") || "").trim(),
+      limit: requestUrl.searchParams.get("limit"),
+    });
+  }
+
+  if (method === "GET" && requestUrl.pathname === "/api/module-verifications") {
+    return db.getModuleVerificationMemory({
+      moduleId: (requestUrl.searchParams.get("moduleId") || "").trim(),
+      adoptionId: (requestUrl.searchParams.get("adoptionId") || "").trim(),
+      workspacePath: (requestUrl.searchParams.get("workspacePath") || "").trim(),
+      targetWorkspacePath: (requestUrl.searchParams.get("targetWorkspacePath") || "").trim(),
+      sourceWorkspacePath: (requestUrl.searchParams.get("sourceWorkspacePath") || "").trim(),
+      query: (requestUrl.searchParams.get("query") || "").trim(),
+      limit: requestUrl.searchParams.get("limit"),
+    });
+  }
+
+  if (method === "GET" && requestUrl.pathname === "/api/adoption-recipe") {
+    return db.buildAdoptionRecipe({
+      moduleId: (requestUrl.searchParams.get("moduleId") || "").trim(),
+      moduleCanonicalKey: (requestUrl.searchParams.get("moduleCanonicalKey") || "").trim(),
+      workspacePath: (requestUrl.searchParams.get("workspacePath") || "").trim(),
+      targetWorkspacePath: (requestUrl.searchParams.get("targetWorkspacePath") || "").trim(),
+      query: (requestUrl.searchParams.get("query") || "").trim(),
+      capability: (requestUrl.searchParams.get("capability") || "").trim(),
+      limit: requestUrl.searchParams.get("limit"),
+    });
+  }
+
+  if (method === "GET" && requestUrl.pathname === "/api/adoption-execution-assist") {
+    return db.buildAdoptionExecutionAssist({
+      moduleId: (requestUrl.searchParams.get("moduleId") || "").trim(),
+      moduleCanonicalKey: (requestUrl.searchParams.get("moduleCanonicalKey") || "").trim(),
+      workspacePath: (requestUrl.searchParams.get("workspacePath") || "").trim(),
+      targetWorkspacePath: (requestUrl.searchParams.get("targetWorkspacePath") || "").trim(),
+      query: (requestUrl.searchParams.get("query") || "").trim(),
+      capability: (requestUrl.searchParams.get("capability") || "").trim(),
+      limit: requestUrl.searchParams.get("limit"),
+    });
+  }
+
+  if (method === "GET" && requestUrl.pathname === "/api/adoption-patch-draft") {
+    return db.buildAdoptionPatchDraft({
+      moduleId: (requestUrl.searchParams.get("moduleId") || "").trim(),
+      moduleCanonicalKey: (requestUrl.searchParams.get("moduleCanonicalKey") || "").trim(),
+      workspacePath: (requestUrl.searchParams.get("workspacePath") || "").trim(),
+      targetWorkspacePath: (requestUrl.searchParams.get("targetWorkspacePath") || "").trim(),
+      query: (requestUrl.searchParams.get("query") || "").trim(),
+      capability: (requestUrl.searchParams.get("capability") || "").trim(),
+      limit: requestUrl.searchParams.get("limit"),
+    });
+  }
+
+  if (method === "GET" && requestUrl.pathname === "/api/adoption-apply-preview") {
+    return db.buildAdoptionApplyPreview({
+      moduleId: (requestUrl.searchParams.get("moduleId") || "").trim(),
+      moduleCanonicalKey: (requestUrl.searchParams.get("moduleCanonicalKey") || "").trim(),
+      workspacePath: (requestUrl.searchParams.get("workspacePath") || "").trim(),
+      targetWorkspacePath: (requestUrl.searchParams.get("targetWorkspacePath") || "").trim(),
+      query: (requestUrl.searchParams.get("query") || "").trim(),
+      capability: (requestUrl.searchParams.get("capability") || "").trim(),
+      roles: (requestUrl.searchParams.get("roles") || "").trim().split(",").map((entry) => entry.trim()).filter(Boolean),
+      selectedFiles: (requestUrl.searchParams.get("selectedFiles") || "").trim().split(",").map((entry) => entry.trim()).filter(Boolean),
+      appendExisting: requestUrl.searchParams.get("appendExisting"),
+      overwriteExisting: requestUrl.searchParams.get("overwriteExisting"),
+      allowPackageJson: requestUrl.searchParams.get("allowPackageJson"),
+      allowPlaceholders: requestUrl.searchParams.get("allowPlaceholders"),
+      dependencyVersions: (requestUrl.searchParams.get("dependencyVersions") || "").trim(),
+      limit: requestUrl.searchParams.get("limit"),
+    });
+  }
+
+  if (method === "GET" && requestUrl.pathname === "/api/low-token-context") {
+    return db.getLowTokenContext({
+      workspacePath: (requestUrl.searchParams.get("workspacePath") || "").trim(),
+      capability: (requestUrl.searchParams.get("capability") || "").trim(),
+      query: (requestUrl.searchParams.get("query") || "").trim(),
+      file: (requestUrl.searchParams.get("file") || "").trim(),
+      location: (requestUrl.searchParams.get("location") || "").trim(),
+      limit: requestUrl.searchParams.get("limit"),
+      maxNodes: requestUrl.searchParams.get("maxNodes"),
+      moduleLimit: requestUrl.searchParams.get("moduleLimit"),
+    });
+  }
+
+  if (method === "GET" && requestUrl.pathname === "/api/implementation/context") {
+    return db.getImplementationContext({
+      workspacePath: (requestUrl.searchParams.get("workspacePath") || "").trim(),
+      query: (requestUrl.searchParams.get("query") || "").trim(),
+      limit: requestUrl.searchParams.get("limit"),
+      recentLimit: requestUrl.searchParams.get("recentLimit"),
+      eventLimit: requestUrl.searchParams.get("eventLimit"),
+    });
   }
 
   if (method === "GET" && requestUrl.pathname === "/api/activity/runs") {
@@ -145,6 +326,38 @@ function handleLocalRequest(requestPath, options = {}) {
     return run;
   }
 
+  if (method === "POST" && requestUrl.pathname === "/api/implementation/upsert") {
+    return safelyHandleLocalMutation(
+      () => db.upsertImplementationThread(body),
+      400,
+      "implementation_upsert_failed"
+    );
+  }
+
+  if (method === "POST" && requestUrl.pathname === "/api/module-adoptions/record") {
+    return safelyHandleLocalMutation(
+      () => db.recordModuleAdoption(body),
+      400,
+      "module_adoption_record_failed"
+    );
+  }
+
+  if (method === "POST" && requestUrl.pathname === "/api/module-verifications/record") {
+    return safelyHandleLocalMutation(
+      () => db.recordModuleVerification(body),
+      400,
+      "module_verification_record_failed"
+    );
+  }
+
+  if (method === "POST" && requestUrl.pathname === "/api/adoption-apply") {
+    return safelyHandleLocalMutation(
+      () => db.applyAdoptionPatchDraft(body),
+      400,
+      "adoption_apply_failed"
+    );
+  }
+
   if (method === "POST" && requestUrl.pathname === "/api/open-folder") {
     return safelyHandleLocalMutation(() => db.openStorageFolder(body.kind), 400, "open_folder_failed");
   }
@@ -183,6 +396,30 @@ function handleLocalRequest(requestPath, options = {}) {
         })),
       };
     }, 400, "crawl_failed");
+  }
+
+  if (method === "POST" && requestUrl.pathname === "/api/modules/register") {
+    return safelyHandleLocalMutation(
+      () => db.registerReusableModule(body),
+      400,
+      "module_register_failed"
+    );
+  }
+
+  if (method === "POST" && requestUrl.pathname === "/api/modules/harvest") {
+    return safelyHandleLocalMutation(
+      () => db.harvestReusableModules(body.rootPath, body),
+      400,
+      "module_harvest_failed"
+    );
+  }
+
+  if (method === "POST" && requestUrl.pathname === "/api/modules/cleanup") {
+    return safelyHandleLocalMutation(
+      () => db.cleanupModuleRegistry(body.workspacePath, body),
+      400,
+      "module_cleanup_failed"
+    );
   }
 
   if (method === "POST" && requestUrl.pathname === "/api/record-edit") {
@@ -366,12 +603,93 @@ async function getContextGraph(nodeId) {
   return request(`/api/context-graph${toQueryString({ nodeId })}`);
 }
 
+async function getContextWindow(filters = {}) {
+  return request(`/api/context-window${toQueryString(filters)}`);
+}
+
+async function traceExecution(filters = {}) {
+  return request(`/api/trace-execution${toQueryString(filters)}`);
+}
+
+async function impactOfChange(filters = {}) {
+  return request(`/api/impact-of-change${toQueryString(filters)}`);
+}
+
+async function getDebugContext(filters = {}) {
+  return request(`/api/debug-context${toQueryString(filters)}`);
+}
+
 async function getStorageInfo() {
   return request("/api/storage");
 }
 
+async function getVaultConfig() {
+  return request("/api/vault-config");
+}
+
+async function setVaultConfig(rootPath) {
+  return request("/api/vault-config", {
+    method: "POST",
+    body: JSON.stringify({ rootPath }),
+  });
+}
+
+async function scaffoldVault(rootPath) {
+  return request("/api/vault/scaffold", {
+    method: "POST",
+    body: JSON.stringify({ rootPath }),
+  });
+}
+
 async function getActivityOverview() {
   return request("/api/activity/overview");
+}
+
+async function findReusableModules(filters = {}) {
+  return request(`/api/reusable-modules${toQueryString(filters)}`);
+}
+
+async function matchProjectToReusableModules(filters = {}) {
+  return request(`/api/project-module-match${toQueryString(filters)}`);
+}
+
+async function getModuleAdoptionMemory(filters = {}) {
+  return request(`/api/module-adoptions${toQueryString(filters)}`);
+}
+
+async function getModuleVerificationMemory(filters = {}) {
+  return request(`/api/module-verifications${toQueryString(filters)}`);
+}
+
+async function getAdoptionRecipe(filters = {}) {
+  return request(`/api/adoption-recipe${toQueryString(filters)}`);
+}
+
+async function getAdoptionExecutionAssist(filters = {}) {
+  return request(`/api/adoption-execution-assist${toQueryString(filters)}`);
+}
+
+async function getAdoptionPatchDraft(filters = {}) {
+  return request(`/api/adoption-patch-draft${toQueryString(filters)}`);
+}
+
+async function getAdoptionApplyPreview(filters = {}) {
+  return request(`/api/adoption-apply-preview${toQueryString(filters)}`);
+}
+
+async function applyAdoptionPatchDraft(payload = {}) {
+  return request("/api/adoption-apply", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+async function getLowTokenContext(filters = {}) {
+  return request(`/api/low-token-context${toQueryString(filters)}`);
+}
+
+async function getImplementationContext(filters = {}) {
+  return request(`/api/implementation/context${toQueryString(filters)}`);
 }
 
 async function listActivityRuns(filters = {}) {
@@ -399,6 +717,27 @@ async function finishActivity(runId, payload = {}) {
   });
 }
 
+async function upsertImplementationThread(payload = {}) {
+  return request("/api/implementation/upsert", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+async function recordModuleAdoption(payload = {}) {
+  return request("/api/module-adoptions/record", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+async function recordModuleVerification(payload = {}) {
+  return request("/api/module-verifications/record", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 async function openStorageFolder(kind) {
   return request("/api/open-folder", {
     method: "POST",
@@ -410,6 +749,27 @@ async function crawlProjects(rootPath, maxDepth = 3) {
   return request("/api/crawl-projects", {
     method: "POST",
     body: JSON.stringify({ rootPath, maxDepth }),
+  });
+}
+
+async function registerReusableModule(payload) {
+  return request("/api/modules/register", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+async function harvestReusableModules(rootPath, options = {}) {
+  return request("/api/modules/harvest", {
+    method: "POST",
+    body: JSON.stringify({ rootPath, ...options }),
+  });
+}
+
+async function cleanupModuleRegistry(workspacePath, options = {}) {
+  return request("/api/modules/cleanup", {
+    method: "POST",
+    body: JSON.stringify({ workspacePath, ...options }),
   });
 }
 
@@ -519,20 +879,44 @@ module.exports = {
   exportGraph,
   finishActivity,
   getActivityOverview,
+  getContextWindow,
   getContextGraph,
+  getDebugContext,
+  getAdoptionExecutionAssist,
+  getAdoptionApplyPreview,
+  getAdoptionPatchDraft,
+  getAdoptionRecipe,
   getGraph,
+  getImplementationContext,
+  getModuleAdoptionMemory,
+  getModuleVerificationMemory,
   getNode,
   getStorageInfo,
+  getVaultConfig,
+  getLowTokenContext,
   heartbeatActivity,
+  harvestReusableModules,
+  cleanupModuleRegistry,
   importGraph,
   listActivityRuns,
   openStorageFolder,
   recordEdit,
   recordError,
+  registerReusableModule,
   restoreLatestBackup,
   searchNodes,
   setActiveNode,
+  setVaultConfig,
+  scaffoldVault,
   startActivity,
+  findReusableModules,
+  matchProjectToReusableModules,
+  impactOfChange,
+  applyAdoptionPatchDraft,
+  recordModuleAdoption,
+  recordModuleVerification,
   traceNode,
+  traceExecution,
+  upsertImplementationThread,
   upsertNodeFromTrace,
 };

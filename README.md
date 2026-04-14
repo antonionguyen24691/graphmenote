@@ -51,8 +51,49 @@ Thu muc goc co the doi bang env:
 
 - `GRAPH_MEMORY_HOME`
 - `GRAPH_MEMORY_DB_PATH`
+- `GRAPH_MEMORY_VAULT_ROOT`
 
 Dieu nay cho phep VS Code, Codex, Antigravity, CLI va MCP cung doc/ghi vao cung mot kho nho cuc bo tren may.
+
+## Obsidian Vault + Module Memory
+
+Graph Memory da co them lop tri thuc ben ngoai repo code de phuc vu workflow "LLM wiki + module reuse + low token":
+
+- `External vault`: Obsidian-style vault luu o working directory rieng cho artifact markdown.
+- `Reusable modules`: registry cho module/co nang co the tai su dung nhu `map`, `ocr`, `auth`, `upload`, `pdf`.
+- `Low-token context`: bootstrap payload gon cho IDE/CLI, uu tien memory + module candidates truoc khi doc source sau.
+
+### Vault config va scaffold
+
+- HTTP: `GET /api/vault-config`, `POST /api/vault-config`, `POST /api/vault/scaffold`
+- CLI:
+  - `node graph-cli.js vault-config`
+  - `node graph-cli.js vault-set "C:\Users\DELL\KnowledgeVault"`
+  - `node graph-cli.js vault-scaffold "C:\Users\DELL\KnowledgeVault"`
+- MCP: `vault_config`, `set_vault_config`, `scaffold_vault`
+
+### Reusable module registry
+
+- HTTP: `GET /api/reusable-modules`, `POST /api/modules/register`, `POST /api/modules/harvest`
+- CLI:
+  - `node graph-cli.js modules --capability ocr --workspacePath "C:\repo\new-app"`
+  - `node graph-cli.js module-register "C:\repo\stock" "C:\repo\stock\src\ocr" ocr OCR Module`
+  - `node graph-cli.js module-harvest "C:\repo\stock" --maxDepth 5 --maxFiles 300`
+- MCP: `find_reusable_modules`, `register_reusable_module`, `harvest_reusable_modules`
+
+### Low-token bootstrap cho IDE/CLI
+
+- HTTP: `GET /api/low-token-context`
+- CLI: `node graph-cli.js low-token-context --workspacePath "C:\repo\stock" --query ocr`
+- MCP: `low_token_context`
+
+Payload low-token gom:
+
+- project brief
+- recent work trong workspace
+- reusable module candidates
+- compact debug context + recommended files
+- token estimate de giam context load
 
 ## Chay local
 
@@ -351,3 +392,47 @@ Ban mo rong hien tai con them:
 - Them embedding/full-text search cho retrieval tot hon.
 - Dong bo diagnostics, git diff, terminal log vao graph.
 - Dong goi thanh VS Code extension va tool cho Codex/Antigravity.
+
+## Part 3 - Retrieval Layer (Quality-first, token-efficient)
+
+Part 3 bo sung lop truy xuat context theo huong "lay dung, lay gon" de agent/IDE khong can doc lai toan bo graph.
+
+### API retrieval moi
+
+- `GET /api/context-window`
+- `GET /api/trace-execution`
+- `GET /api/impact-of-change`
+- `GET /api/debug-context`
+
+Vi du:
+
+```bash
+curl "http://localhost:3010/api/context-window?query=token&limit=8&maxNodes=12"
+curl "http://localhost:3010/api/trace-execution?entry=src/auth/index.ts&hops=4"
+curl "http://localhost:3010/api/impact-of-change?file=src/auth/token-store.ts&hops=3"
+curl "http://localhost:3010/api/debug-context?query=refresh%20token&limit=8&maxNodes=12&hops=3"
+```
+
+`/api/debug-context` la payload one-shot cho tac vu debug: top context + trace + impact + recommendedFiles + tokenEstimate.
+
+### CLI retrieval moi
+
+```bash
+node graph-cli.js context-window --query token --limit 8 --maxNodes 12
+node graph-cli.js trace-execution --entry src/auth/index.ts --hops 4
+node graph-cli.js impact-of-change --file src/auth/token-store.ts --hops 3
+node graph-cli.js debug-context --query "refresh token" --limit 8 --maxNodes 12 --hops 3
+```
+
+### MCP retrieval moi (cho Codex/IDE agents)
+
+- `get_context_window`
+- `trace_execution`
+- `impact_of_change`
+- `debug_context`
+
+Khuyen nghi cho agent flow:
+
+1. Goi `debug_context` truoc de lay payload gon.
+2. Chi khi can moi mo them `get_node` hoac source preview.
+3. Sau khi sua, ghi `record_edit` / `record_error` / `record_outcome`.

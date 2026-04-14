@@ -7,10 +7,15 @@
     "cli": "node graph-cli.js",
     "watcher": "node activity-watcher.js",
     "boot": "powershell -ExecutionPolicy Bypass -File .\\boot-graph-memory.ps1",
-    "startup:install": "powershell -ExecutionPolicy Bypass -File .\\install-graph-startup.ps1"
+    "startup:install": "powershell -ExecutionPolicy Bypass -File .\\install-graph-startup.ps1",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.28.0",
+    "typescript": "^5.9.3",
     "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.53.1"
   }
 }

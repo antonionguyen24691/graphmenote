@@ -69,6 +69,134 @@ EXAMPLE: Before fixing a bug in "src/auth/index.ts", call this with that file pa
   })
 );
 
+server.tool(
+  "get_context_window",
+  `Retrieve a ranked, compact context window optimized for agent token efficiency.
+Use this when you need the highest-signal nodes/files for debugging with minimal payload size.`,
+  {
+    nodeId: z.string().optional().describe("Optional node id anchor"),
+    file: z.string().optional().describe("Optional file path filter"),
+    location: z.string().optional().describe("Optional location filter such as src/auth/index.ts:42"),
+    query: z.string().optional().describe("Optional semantic keyword query"),
+    workspacePath: z.string().optional().describe("Optional workspace path to prioritize"),
+    limit: z.number().optional().describe("Maximum number of ranked context nodes"),
+  },
+  async ({ nodeId, file, location, query, workspacePath, limit }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(
+          db.getContextWindow({
+            nodeId,
+            file,
+            location,
+            query,
+            workspacePath,
+            limit,
+          }),
+          null,
+          2
+        ),
+      },
+    ],
+  })
+);
+
+server.tool(
+  "trace_execution",
+  `Build an ordered execution trace from the graph context.
+Use this after get_context_window to obtain a concise route/service/file/error/edit chain.`,
+  {
+    nodeId: z.string().optional().describe("Optional node id anchor"),
+    file: z.string().optional().describe("Optional file filter"),
+    location: z.string().optional().describe("Optional location filter"),
+    query: z.string().optional().describe("Optional keyword query"),
+    workspacePath: z.string().optional().describe("Optional workspace path to prioritize"),
+    limit: z.number().optional().describe("Context ranking limit before trace selection"),
+  },
+  async ({ nodeId, file, location, query, workspacePath, limit }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(
+          db.traceExecution({
+            nodeId,
+            file,
+            location,
+            query,
+            workspacePath,
+            limit,
+          }),
+          null,
+          2
+        ),
+      },
+    ],
+  })
+);
+
+server.tool(
+  "impact_of_change",
+  `Estimate blast radius for a candidate change by traversing graph relations, parent/child links, and shared files.`,
+  {
+    nodeId: z.string().optional().describe("Optional node id seed"),
+    file: z.string().optional().describe("Optional file path seed"),
+    query: z.string().optional().describe("Optional keyword seed"),
+    maxNodes: z.number().optional().describe("Maximum impacted nodes to return"),
+  },
+  async ({ nodeId, file, query, maxNodes }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(
+          db.impactOfChange({
+            nodeId,
+            file,
+            query,
+            maxNodes,
+          }),
+          null,
+          2
+        ),
+      },
+    ],
+  })
+);
+
+server.tool(
+  "debug_context",
+  `One-shot retrieval for agents: ranked context window + execution trace + impact analysis in a single compact payload.`,
+  {
+    nodeId: z.string().optional().describe("Optional node id anchor"),
+    file: z.string().optional().describe("Optional file path filter"),
+    location: z.string().optional().describe("Optional location filter"),
+    query: z.string().optional().describe("Optional keyword query"),
+    workspacePath: z.string().optional().describe("Optional workspace path to prioritize"),
+    limit: z.number().optional().describe("Maximum ranked context nodes"),
+    maxNodes: z.number().optional().describe("Maximum impacted nodes"),
+  },
+  async ({ nodeId, file, location, query, workspacePath, limit, maxNodes }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(
+          db.getDebugContext({
+            nodeId,
+            file,
+            location,
+            query,
+            workspacePath,
+            limit,
+            maxNodes,
+          }),
+          null,
+          2
+        ),
+      },
+    ],
+  })
+);
+
 /* ────────────────────────────────────────────────────────────────────────────
    RECORD OUTCOME — Finalize your session and persist what you did
    ──────────────────────────────────────────────────────────────────────────── */
@@ -205,6 +333,589 @@ server.tool(
   {},
   async () => ({
     content: [{ type: "text", text: JSON.stringify(db.getStorageInfo(), null, 2) }],
+  })
+);
+
+server.tool(
+  "vault_config",
+  "Get the configured external Obsidian-style vault path and scaffold file locations.",
+  {},
+  async () => ({
+    content: [{ type: "text", text: JSON.stringify(db.getVaultConfig(), null, 2) }],
+  })
+);
+
+server.tool(
+  "set_vault_config",
+  "Set the external Obsidian-style vault root path used for human-readable knowledge artifacts.",
+  {
+    rootPath: z.string().describe("Absolute path to the external vault root"),
+  },
+  async ({ rootPath }) => ({
+    content: [{ type: "text", text: JSON.stringify(db.setVaultConfig(rootPath), null, 2) }],
+  })
+);
+
+server.tool(
+  "scaffold_vault",
+  "Create the Obsidian-style vault folder structure and starter markdown files.",
+  {
+    rootPath: z.string().describe("Absolute path where the vault should be created"),
+  },
+  async ({ rootPath }) => ({
+    content: [{ type: "text", text: JSON.stringify(db.scaffoldVault(rootPath), null, 2) }],
+  })
+);
+
+server.tool(
+  "find_reusable_modules",
+  "Find reusable modules such as map, ocr, auth, upload, and similar capabilities across projects.",
+  {
+    workspacePath: z.string().optional().describe("Optional workspace path to prioritize"),
+    capability: z.string().optional().describe("Optional capability filter, e.g. 'ocr' or 'map'"),
+    query: z.string().optional().describe("Optional free-text query"),
+    limit: z.number().optional().describe("Maximum modules to return"),
+  },
+  async ({ workspacePath, capability, query, limit }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(db.findReusableModules({ workspacePath, capability, query, limit }), null, 2),
+      },
+    ],
+  })
+);
+
+server.tool(
+  "match_project_modules",
+  "Profile a target workspace, infer its stack/capabilities, and rank reusable modules by copy-first or adapt-first priority.",
+  {
+    workspacePath: z.string().describe("Workspace root that needs reusable-module recommendations"),
+    capability: z.string().optional().describe("Optional desired capability such as 'ocr' or 'map'"),
+    query: z.string().optional().describe("Optional free-text feature description"),
+    limit: z.number().optional().describe("Maximum matched modules to return"),
+  },
+  async ({ workspacePath, capability, query, limit }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(db.matchProjectToReusableModules({ workspacePath, capability, query, limit }), null, 2),
+      },
+    ],
+  })
+);
+
+server.tool(
+  "module_adoption_memory",
+  "Return cross-project adoption memory for reusable modules, including validated integration patterns, adapter changes, dependency changes, and recent reuse attempts.",
+  {
+    moduleId: z.string().optional().describe("Optional module node id"),
+    workspacePath: z.string().optional().describe("Optional target workspace to filter adoption history"),
+    targetWorkspacePath: z.string().optional().describe("Explicit target workspace filter"),
+    sourceWorkspacePath: z.string().optional().describe("Optional source workspace filter"),
+    query: z.string().optional().describe("Optional keyword filter"),
+    limit: z.number().optional().describe("Maximum adoption records to return"),
+  },
+  async ({ moduleId, workspacePath, targetWorkspacePath, sourceWorkspacePath, query, limit }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(
+          db.getModuleAdoptionMemory({
+            moduleId,
+            workspacePath,
+            targetWorkspacePath,
+            sourceWorkspacePath,
+            query,
+            limit,
+          }),
+          null,
+          2
+        ),
+      },
+    ],
+  })
+);
+
+server.tool(
+  "module_verification_memory",
+  "Return verification memory for reusable modules, including passing tests, integration failures, and fix patterns that worked across projects.",
+  {
+    moduleId: z.string().optional().describe("Optional module node id"),
+    adoptionId: z.string().optional().describe("Optional adoption record id"),
+    workspacePath: z.string().optional().describe("Optional target workspace to filter verification history"),
+    targetWorkspacePath: z.string().optional().describe("Explicit target workspace filter"),
+    sourceWorkspacePath: z.string().optional().describe("Optional source workspace filter"),
+    query: z.string().optional().describe("Optional keyword filter"),
+    limit: z.number().optional().describe("Maximum verification records to return"),
+  },
+  async ({ moduleId, adoptionId, workspacePath, targetWorkspacePath, sourceWorkspacePath, query, limit }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(
+          db.getModuleVerificationMemory({
+            moduleId,
+            adoptionId,
+            workspacePath,
+            targetWorkspacePath,
+            sourceWorkspacePath,
+            query,
+            limit,
+          }),
+          null,
+          2
+        ),
+      },
+    ],
+  })
+);
+
+server.tool(
+  "adoption_recipe",
+  "Generate a short integration checklist for reusing a module in a target workspace, using validated adoption memory first and module metadata as fallback.",
+  {
+    moduleId: z.string().optional().describe("Reusable module node id"),
+    moduleCanonicalKey: z.string().optional().describe("Reusable module canonical key"),
+    workspacePath: z.string().optional().describe("Optional target workspace alias"),
+    targetWorkspacePath: z.string().optional().describe("Target workspace that needs the recipe"),
+    capability: z.string().optional().describe("Optional capability hint"),
+    query: z.string().optional().describe("Optional feature hint"),
+    limit: z.number().optional().describe("Adoption memory limit"),
+  },
+  async ({ moduleId, moduleCanonicalKey, workspacePath, targetWorkspacePath, capability, query, limit }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(
+          db.buildAdoptionRecipe({
+            moduleId,
+            moduleCanonicalKey,
+            workspacePath,
+            targetWorkspacePath,
+            capability,
+            query,
+            limit,
+          }),
+          null,
+          2
+        ),
+      },
+    ],
+  })
+);
+
+server.tool(
+  "adoption_execution_assist",
+  "Generate a patch-oriented execution assist that tells an agent which target files to create or modify first when adopting a module into a target workspace.",
+  {
+    moduleId: z.string().optional().describe("Reusable module node id"),
+    moduleCanonicalKey: z.string().optional().describe("Reusable module canonical key"),
+    workspacePath: z.string().optional().describe("Optional target workspace alias"),
+    targetWorkspacePath: z.string().optional().describe("Target workspace that needs the execution assist"),
+    capability: z.string().optional().describe("Optional capability hint"),
+    query: z.string().optional().describe("Optional feature hint"),
+    limit: z.number().optional().describe("Adoption memory limit"),
+  },
+  async ({ moduleId, moduleCanonicalKey, workspacePath, targetWorkspacePath, capability, query, limit }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(
+          db.buildAdoptionExecutionAssist({
+            moduleId,
+            moduleCanonicalKey,
+            workspacePath,
+            targetWorkspacePath,
+            capability,
+            query,
+            limit,
+          }),
+          null,
+          2
+        ),
+      },
+    ],
+  })
+);
+
+server.tool(
+  "adoption_patch_draft",
+  "Generate file-by-file patch drafts and starter skeletons for adopting a reusable module into a target workspace.",
+  {
+    moduleId: z.string().optional().describe("Reusable module node id"),
+    moduleCanonicalKey: z.string().optional().describe("Reusable module canonical key"),
+    workspacePath: z.string().optional().describe("Optional target workspace alias"),
+    targetWorkspacePath: z.string().optional().describe("Target workspace that needs the patch draft"),
+    capability: z.string().optional().describe("Optional capability hint"),
+    query: z.string().optional().describe("Optional feature hint"),
+    limit: z.number().optional().describe("Adoption memory limit"),
+  },
+  async ({ moduleId, moduleCanonicalKey, workspacePath, targetWorkspacePath, capability, query, limit }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(
+          db.buildAdoptionPatchDraft({
+            moduleId,
+            moduleCanonicalKey,
+            workspacePath,
+            targetWorkspacePath,
+            capability,
+            query,
+            limit,
+          }),
+          null,
+          2
+        ),
+      },
+    ],
+  })
+);
+
+server.tool(
+  "adoption_apply_preview",
+  "Preview which scaffold draft files are safe to apply, which are blocked, and which require explicit risky-operation flags.",
+  {
+    moduleId: z.string().optional().describe("Reusable module node id"),
+    moduleCanonicalKey: z.string().optional().describe("Reusable module canonical key"),
+    workspacePath: z.string().optional().describe("Optional target workspace alias"),
+    targetWorkspacePath: z.string().optional().describe("Target workspace that needs the preview"),
+    capability: z.string().optional().describe("Optional capability hint"),
+    query: z.string().optional().describe("Optional feature hint"),
+    roles: z.array(z.string()).optional().describe("Optional role filter such as ['module-entry', 'adapter']"),
+    selectedFiles: z.array(z.string()).optional().describe("Optional file path filter"),
+    appendExisting: z.boolean().optional().describe("Allow appending scaffold blocks into existing files"),
+    overwriteExisting: z.boolean().optional().describe("Allow overwriting existing files"),
+    allowPackageJson: z.boolean().optional().describe("Allow package.json dependency updates"),
+    allowPlaceholders: z.boolean().optional().describe("Allow snippets that still contain placeholders"),
+    dependencyVersions: z.record(z.string()).optional().describe("Dependency versions to merge into package.json"),
+    limit: z.number().optional().describe("Adoption memory limit"),
+  },
+  async ({ moduleId, moduleCanonicalKey, workspacePath, targetWorkspacePath, capability, query, roles, selectedFiles, appendExisting, overwriteExisting, allowPackageJson, allowPlaceholders, dependencyVersions, limit }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(
+          db.buildAdoptionApplyPreview({
+            moduleId,
+            moduleCanonicalKey,
+            workspacePath,
+            targetWorkspacePath,
+            capability,
+            query,
+            roles,
+            selectedFiles,
+            appendExisting,
+            overwriteExisting,
+            allowPackageJson,
+            allowPlaceholders,
+            dependencyVersions,
+            limit,
+          }),
+          null,
+          2
+        ),
+      },
+    ],
+  })
+);
+
+server.tool(
+  "apply_adoption_patch_draft",
+  "Apply scaffold drafts into a target workspace with explicit guards for existing files and manifest changes.",
+  {
+    moduleId: z.string().optional().describe("Reusable module node id"),
+    moduleCanonicalKey: z.string().optional().describe("Reusable module canonical key"),
+    workspacePath: z.string().optional().describe("Optional target workspace alias"),
+    targetWorkspacePath: z.string().optional().describe("Target workspace that will receive the scaffold"),
+    capability: z.string().optional().describe("Optional capability hint"),
+    query: z.string().optional().describe("Optional feature hint"),
+    roles: z.array(z.string()).optional().describe("Optional role filter"),
+    selectedFiles: z.array(z.string()).optional().describe("Optional file path filter"),
+    appendExisting: z.boolean().optional().describe("Allow appending scaffold blocks into existing files"),
+    overwriteExisting: z.boolean().optional().describe("Allow overwriting existing files"),
+    allowPackageJson: z.boolean().optional().describe("Allow package.json dependency updates"),
+    allowPlaceholders: z.boolean().optional().describe("Allow snippets that still contain placeholders"),
+    dependencyVersions: z.record(z.string()).optional().describe("Dependency versions to merge into package.json"),
+    apply: z.boolean().optional().describe("Set false to return the same payload without writing"),
+    limit: z.number().optional().describe("Adoption memory limit"),
+  },
+  async ({ moduleId, moduleCanonicalKey, workspacePath, targetWorkspacePath, capability, query, roles, selectedFiles, appendExisting, overwriteExisting, allowPackageJson, allowPlaceholders, dependencyVersions, apply, limit }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(
+          db.applyAdoptionPatchDraft({
+            moduleId,
+            moduleCanonicalKey,
+            workspacePath,
+            targetWorkspacePath,
+            capability,
+            query,
+            roles,
+            selectedFiles,
+            appendExisting,
+            overwriteExisting,
+            allowPackageJson,
+            allowPlaceholders,
+            dependencyVersions,
+            apply,
+            limit,
+          }),
+          null,
+          2
+        ),
+      },
+    ],
+  })
+);
+
+server.tool(
+  "register_reusable_module",
+  "Register or update a reusable module card so future sessions can reuse it instead of rewriting it.",
+  {
+    workspacePath: z.string().describe("Workspace root that owns the module"),
+    entryPath: z.string().describe("Absolute path to the module entry file or folder"),
+    capability: z.string().describe("Primary capability name, e.g. 'ocr'"),
+    name: z.string().optional().describe("Human-friendly module name"),
+    summary: z.string().optional().describe("What the module does"),
+    integrationHint: z.string().optional().describe("How future projects should integrate it"),
+  },
+  async ({ workspacePath, entryPath, capability, name, summary, integrationHint }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(
+          db.registerReusableModule({ workspacePath, entryPath, capability, name, summary, integrationHint }),
+          null,
+          2
+        ),
+      },
+    ],
+  })
+);
+
+server.tool(
+  "harvest_reusable_modules",
+  "Scan a project root and auto-register likely reusable modules using structural analysis, then refresh registry freshness and deduplicate stale entries.",
+  {
+    rootPath: z.string().describe("Workspace/project root to scan"),
+    maxDepth: z.number().optional().describe("Max directory depth to inspect"),
+    maxFiles: z.number().optional().describe("Max files to inspect"),
+  },
+  async ({ rootPath, maxDepth, maxFiles }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(db.harvestReusableModules(rootPath, { maxDepth, maxFiles }), null, 2),
+      },
+    ],
+  })
+);
+
+server.tool(
+  "cleanup_module_registry",
+  "Deduplicate reusable-module entries for a workspace and mark legacy, duplicate, or stale harvested nodes so lookups only surface the newest active registry entries.",
+  {
+    workspacePath: z.string().describe("Workspace root whose module registry should be cleaned"),
+    dryRun: z.boolean().optional().describe("When true, only report the cleanup plan without mutating the registry"),
+  },
+  async ({ workspacePath, dryRun }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(db.cleanupModuleRegistry(workspacePath, { workspacePath, dryRun }), null, 2),
+      },
+    ],
+  })
+);
+
+server.tool(
+  "low_token_context",
+  "Return a compact project brief with recent work, top context, and reusable module candidates for IDE/CLI usage.",
+  {
+    workspacePath: z.string().describe("Workspace root to summarize"),
+    capability: z.string().optional().describe("Optional desired capability"),
+    query: z.string().optional().describe("Optional task query"),
+    file: z.string().optional().describe("Optional file focus"),
+    location: z.string().optional().describe("Optional location focus"),
+    limit: z.number().optional().describe("Context node limit"),
+    maxNodes: z.number().optional().describe("Impact node limit"),
+    moduleLimit: z.number().optional().describe("Reusable module limit"),
+  },
+  async ({ workspacePath, capability, query, file, location, limit, maxNodes, moduleLimit }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(
+          db.getLowTokenContext({
+            workspacePath,
+            capability,
+            query,
+            file,
+            location,
+            limit,
+            maxNodes,
+            moduleLimit,
+          }),
+          null,
+          2
+        ),
+      },
+    ],
+  })
+);
+
+server.tool(
+  "implementation_context",
+  "Return resumable implementation threads, current step, next step, blockers, and recent checkpoints so another IDE or CLI can continue work with minimal tokens.",
+  {
+    workspacePath: z.string().describe("Workspace root to inspect"),
+    query: z.string().optional().describe("Optional task filter"),
+    limit: z.number().optional().describe("Active thread limit"),
+    recentLimit: z.number().optional().describe("Completed thread limit"),
+    eventLimit: z.number().optional().describe("Recent event limit"),
+  },
+  async ({ workspacePath, query, limit, recentLimit, eventLimit }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(
+          db.getImplementationContext({ workspacePath, query, limit, recentLimit, eventLimit }),
+          null,
+          2
+        ),
+      },
+    ],
+  })
+);
+
+server.tool(
+  "upsert_implementation_task",
+  "Create or update a resumable implementation thread with current step, next step, blockers, touched files, and tool progress.",
+  {
+    workspacePath: z.string().describe("Workspace root that owns the task"),
+    title: z.string().describe("Human-readable task title"),
+    taskKey: z.string().optional().describe("Stable task key when multiple tools should coordinate on the same thread"),
+    summary: z.string().optional().describe("Short progress summary"),
+    currentStep: z.string().optional().describe("Current implementation step"),
+    nextStep: z.string().optional().describe("Next action to resume from"),
+    blocker: z.string().optional().describe("Current blocker, if any"),
+    status: z.enum(["active", "blocked", "paused", "completed", "failed"]).optional().describe("Implementation task status"),
+    currentFile: z.string().optional().describe("Current file"),
+    touchedFiles: z.array(z.string()).optional().describe("Touched files"),
+    tags: z.array(z.string()).optional().describe("Optional task tags"),
+  },
+  async ({ workspacePath, title, taskKey, summary, currentStep, nextStep, blocker, status, currentFile, touchedFiles, tags }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(
+          db.upsertImplementationThread({
+            workspacePath,
+            title,
+            taskKey,
+            summary,
+            currentStep,
+            nextStep,
+            blocker,
+            status,
+            currentFile,
+            touchedFiles,
+            tags,
+          }),
+          null,
+          2
+        ),
+      },
+    ],
+  })
+);
+
+server.tool(
+  "record_module_adoption",
+  "Record that a target project copied or adapted a reusable module, including the integration pattern, changed adapters/dependencies/env, and whether the adoption was validated.",
+  {
+    moduleId: z.string().optional().describe("Reusable module node id"),
+    moduleCanonicalKey: z.string().optional().describe("Reusable module canonical key when node id is not available"),
+    targetWorkspacePath: z.string().describe("Workspace that adopted the module"),
+    adoptionType: z.enum(["copy", "adapt", "reference"]).optional().describe("How the module was reused"),
+    status: z.enum(["planned", "integrating", "validated", "failed", "abandoned"]).optional().describe("Adoption status"),
+    summary: z.string().optional().describe("Short outcome summary"),
+    integrationPattern: z.string().optional().describe("What integration approach worked"),
+    adapterChanges: z.array(z.string()).optional().describe("Adapter changes needed to fit the target project"),
+    dependencyChanges: z.array(z.string()).optional().describe("Dependency additions/removals needed"),
+    envChanges: z.array(z.string()).optional().describe("Env/config changes needed"),
+    touchedFiles: z.array(z.string()).optional().describe("Touched target files"),
+  },
+  async ({ moduleId, moduleCanonicalKey, targetWorkspacePath, adoptionType, status, summary, integrationPattern, adapterChanges, dependencyChanges, envChanges, touchedFiles }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(
+          db.recordModuleAdoption({
+            moduleId,
+            moduleCanonicalKey,
+            targetWorkspacePath,
+            adoptionType,
+            status,
+            summary,
+            integrationPattern,
+            adapterChanges,
+            dependencyChanges,
+            envChanges,
+            touchedFiles,
+          }),
+          null,
+          2
+        ),
+      },
+    ],
+  })
+);
+
+server.tool(
+  "record_module_verification",
+  "Record verification memory for a reused module, including passing tests, integration failures, and fix patterns that worked in the target workspace.",
+  {
+    moduleId: z.string().optional().describe("Reusable module node id"),
+    moduleCanonicalKey: z.string().optional().describe("Reusable module canonical key when node id is not available"),
+    adoptionId: z.string().optional().describe("Optional linked adoption record id"),
+    adoptionKey: z.string().optional().describe("Optional linked adoption key"),
+    targetWorkspacePath: z.string().describe("Workspace that verified the module"),
+    status: z.enum(["pending", "passed", "failed", "mixed", "flaky"]).optional().describe("Verification status"),
+    summary: z.string().optional().describe("Short verification outcome summary"),
+    passedTests: z.array(z.string()).optional().describe("Tests or smoke checks that passed"),
+    failedTests: z.array(z.string()).optional().describe("Tests that failed"),
+    integrationErrors: z.array(z.string()).optional().describe("Integration errors encountered"),
+    fixPatterns: z.array(z.string()).optional().describe("Fix patterns that resolved issues"),
+    verificationNotes: z.array(z.string()).optional().describe("Short verification notes"),
+  },
+  async ({ moduleId, moduleCanonicalKey, adoptionId, adoptionKey, targetWorkspacePath, status, summary, passedTests, failedTests, integrationErrors, fixPatterns, verificationNotes }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(
+          db.recordModuleVerification({
+            moduleId,
+            moduleCanonicalKey,
+            adoptionId,
+            adoptionKey,
+            targetWorkspacePath,
+            status,
+            summary,
+            passedTests,
+            failedTests,
+            integrationErrors,
+            fixPatterns,
+            verificationNotes,
+          }),
+          null,
+          2
+        ),
+      },
+    ],
   })
 );
 

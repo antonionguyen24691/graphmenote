@@ -73,6 +73,81 @@
           </div>
         </section>
 
+        <section class="command-center">
+          <div class="section-heading">
+            <h2>Workspace Command Center</h2>
+            <span id="commandCenterStatus">loading workspace memory...</span>
+          </div>
+
+          <div class="command-spotlights">
+            <article class="command-spotlight">
+              <small>Workspace</small>
+              <strong id="workspaceSpotlightTitle">Resolving active workspace...</strong>
+              <p id="workspaceSpotlightCopy">Chọn node có project context để bật command center human-facing.</p>
+            </article>
+
+            <article class="command-spotlight">
+              <small>Resume From Here</small>
+              <strong id="resumeSpotlightTitle">No resumable task yet</strong>
+              <p id="resumeSpotlightCopy">Implementation thread hiện tại sẽ hiện ở đây để bạn hoặc IDE khác tiếp tục nhanh.</p>
+            </article>
+
+            <article class="command-spotlight">
+              <small>Best Reuse Candidate</small>
+              <strong id="moduleSpotlightTitle">No module match yet</strong>
+              <p id="moduleSpotlightCopy">Khi workspace có tín hiệu capability, module tái dùng mạnh nhất sẽ hiện ở đây.</p>
+            </article>
+
+            <article class="command-spotlight">
+              <small>Verification Signal</small>
+              <strong id="verificationSpotlightTitle">No verified pattern yet</strong>
+              <p id="verificationSpotlightCopy">Passed tests, integration errors, và fix pattern hiệu quả sẽ được gom ở đây.</p>
+            </article>
+          </div>
+
+          <div class="command-grid">
+            <article class="command-card">
+              <div class="section-heading">
+                <h3>Resume Task</h3>
+                <span id="resumeTaskMeta">current thread</span>
+              </div>
+              <div id="resumeTaskPanel" class="command-list"></div>
+            </article>
+
+            <article class="command-card">
+              <div class="section-heading">
+                <h3>Reusable Modules</h3>
+                <span id="moduleMatchesMeta">match ranking</span>
+              </div>
+              <div id="moduleMatchesList" class="command-list"></div>
+            </article>
+
+            <article class="command-card">
+              <div class="section-heading">
+                <h3>Verification Memory</h3>
+                <span id="verificationMeta">trusted patterns</span>
+              </div>
+              <div id="verificationMemoryList" class="command-list"></div>
+            </article>
+
+            <article class="command-card">
+              <div class="section-heading">
+                <h3>Recommended Files</h3>
+                <span id="recommendedFilesMeta">open next</span>
+              </div>
+              <div id="recommendedFilesList" class="command-list"></div>
+            </article>
+
+            <article class="command-card command-card-wide">
+              <div class="section-heading">
+                <h3>Next Moves</h3>
+                <span id="recommendationsMeta">operator hints</span>
+              </div>
+              <div id="recommendationsList" class="command-list"></div>
+            </article>
+          </div>
+        </section>
+
         <section class="activity-panel">
           <div class="section-heading">
             <h2>Usage Memory</h2>
@@ -111,14 +186,24 @@
             <span id="graphHint">drag node, pan canvas, wheel to zoom</span>
           </div>
           <div class="graph-toolbar">
-            <button id="graphPinMode" type="button">Pin Mode Off</button>
+            <div class="toolbar-cluster">
+            <button id="graphSelectMode" type="button">Select</button>
+            <button id="graphPanMode" type="button">Pan</button>
+            <button id="graphPinMode" type="button">Pin</button>
+            </div>
+            <div class="toolbar-cluster">
             <button id="graphClearSelection" type="button">Clear Selection</button>
+            <button id="graphAutoArrange" type="button">Auto Arrange</button>
+            <button id="graphFitScreen" type="button">Fit Screen</button>
+            <button id="graphRecenter" type="button">Recenter</button>
+            </div>
+            <div class="toolbar-cluster">
             <button id="graphZoomIn" type="button">Zoom In</button>
             <button id="graphZoomOut" type="button">Zoom Out</button>
-            <button id="graphRecenter" type="button">Recenter</button>
             <button id="graphResetView" type="button">Show All</button>
             <button id="graphReleasePins" type="button">Release Pins</button>
-            <button id="graphFullscreen" type="button" class="btn-fullscreen" title="Phóng to toàn màn hình">⛶ Fullscreen</button>
+            <button id="graphFullscreen" type="button" class="btn-fullscreen" title="Toggle fullscreen">Fullscreen</button>
+          </div>
           </div>
           <div class="graph-controls">
             <label class="graph-control">
@@ -143,6 +228,22 @@
                 <option value="smart" selected>Smart</option>
                 <option value="selected">Selected</option>
                 <option value="all">All</option>
+              </select>
+            </label>
+            <label class="graph-control">
+              <span>Layout</span>
+              <select id="graphLayoutMode">
+                <option value="balanced" selected>Orbital</option>
+                <option value="hierarchy">Hierarchy</option>
+                <option value="performance">Performance</option>
+              </select>
+            </label>
+            <label class="graph-control">
+              <span>Density</span>
+              <select id="graphRevealMode">
+                <option value="priority" selected>Priority</option>
+                <option value="expanded">Expanded</option>
+                <option value="full">Full</option>
               </select>
             </label>
             <label class="graph-toggle">
@@ -188,6 +289,7 @@
             </div>
 
             <div id="graphViewport" class="graph-viewport">
+              <div id="graphSyncHint" class="canvas-sync-hint" aria-live="polite"></div>
               <div id="graphScene" class="graph-scene">
                 <svg id="graphEdges" class="graph-edges"></svg>
                 <div id="graphNodes" class="graph-nodes"></div>
@@ -347,18 +449,63 @@
 
             <div class="pipeline-canvas-wrapper">
               <div class="pipeline-canvas-toolbar">
+                <div class="toolbar-cluster">
+                <label class="pipeline-layout-control">
+                  <span>Layout</span>
+                  <select id="pipelineLayoutMode">
+                    <option value="flow" selected>Flow</option>
+                    <option value="grouped">Grouped</option>
+                    <option value="compact">Compact</option>
+                  </select>
+                </label>
+                <button type="button" id="pipelineAutoArrange">Auto Arrange</button>
+                <button type="button" id="pipelineFitScreen">Fit Screen</button>
+                </div>
+                <div class="toolbar-cluster">
                 <button type="button" id="pipelineZoomIn">Zoom In</button>
                 <button type="button" id="pipelineZoomOut">Zoom Out</button>
                 <button type="button" id="pipelineRecenter">Recenter</button>
-                <button type="button" id="pipelineFullscreen" class="btn-fullscreen" title="Phóng to toàn màn hình">⛶ Fullscreen</button>
+                <button type="button" id="pipelineFullscreen" class="btn-fullscreen" title="Toggle fullscreen">Fullscreen</button>
+                </div>
                 <span id="pipelineCardCount">0 tables · 0 relations</span>
               </div>
               <div class="pipeline-viewport" id="pipelineViewport">
+                <div id="pipelineSyncHint" class="canvas-sync-hint" aria-live="polite"></div>
                 <div class="pipeline-scene" id="pipelineScene">
                   <svg class="pipeline-edges" id="pipelineEdges"></svg>
                   <div class="pipeline-cards" id="pipelineCards"></div>
                 </div>
+                <div class="pipeline-minimap" id="pipelineMinimap"></div>
               </div>
+            </div>
+          </div>
+
+          <div class="pipeline-traces">
+            <div class="section-heading">
+              <h3>Execution Traces</h3>
+              <span id="pipelineTraceStats">0 traces</span>
+            </div>
+            <div id="pipelineTraceList" class="pipeline-trace-list"></div>
+            <div class="pipeline-trace-lanes">
+              <div class="section-heading">
+                <h3>Trace Lanes</h3>
+                <span id="pipelineLaneStats">0 lanes</span>
+              </div>
+              <div id="pipelineLaneBoard" class="pipeline-lane-board"></div>
+            </div>
+            <div class="pipeline-trace-graph">
+              <div class="section-heading">
+                <h3>Trace Symbol Graph</h3>
+                <span id="pipelineTraceGraphStats">0 edges</span>
+              </div>
+              <div id="pipelineTraceGraph" class="pipeline-trace-graph-board"></div>
+            </div>
+            <div class="pipeline-source-preview">
+              <div class="section-heading">
+                <h3>Source Preview</h3>
+                <span id="pipelineSourcePreviewMeta">no selection</span>
+              </div>
+              <div id="pipelineSourcePreview" class="pipeline-source-preview-board"></div>
             </div>
           </div>
 
