@@ -150,6 +150,43 @@ async function handleApi(req, res, requestUrl) {
     }));
   }
 
+  if (method === "GET" && requestUrl.pathname === "/api/brain/context") {
+    try {
+      return sendJson(res, 200, db.getBrainContext({
+        workspacePath: (requestUrl.searchParams.get("workspacePath") || "").trim(),
+        capability: (requestUrl.searchParams.get("capability") || "").trim(),
+        query: (requestUrl.searchParams.get("query") || "").trim(),
+        file: (requestUrl.searchParams.get("file") || "").trim(),
+        location: (requestUrl.searchParams.get("location") || "").trim(),
+        skillLimit: requestUrl.searchParams.get("skillLimit"),
+        moduleLimit: requestUrl.searchParams.get("moduleLimit"),
+      }));
+    } catch (error) {
+      return sendJson(res, 400, {
+        error: "brain_context_failed",
+        message: error.message,
+      });
+    }
+  }
+
+  if (method === "GET" && requestUrl.pathname === "/api/brain/skills") {
+    return sendJson(res, 200, db.listBrainSkills({
+      capability: (requestUrl.searchParams.get("capability") || "").trim(),
+      query: (requestUrl.searchParams.get("query") || "").trim(),
+      status: (requestUrl.searchParams.get("status") || "active").trim(),
+      limit: requestUrl.searchParams.get("limit"),
+    }));
+  }
+
+  if (method === "GET" && requestUrl.pathname === "/api/brain/skill") {
+    const skillId = (requestUrl.searchParams.get("skillId") || "").trim();
+    const skill = db.getBrainSkill(skillId);
+    if (!skill) {
+      return sendJson(res, 404, { error: "skill_not_found" });
+    }
+    return sendJson(res, 200, skill);
+  }
+
   if (method === "GET" && requestUrl.pathname === "/api/project-module-match") {
     try {
       return sendJson(res, 200, db.matchProjectToReusableModules({
@@ -542,6 +579,30 @@ async function handleApi(req, res, requestUrl) {
     } catch (error) {
       return sendJson(res, 400, {
         error: "module_cleanup_failed",
+        message: error.message,
+      });
+    }
+  }
+
+  if (method === "POST" && requestUrl.pathname === "/api/brain/skills/register") {
+    const body = await readBody(req);
+    try {
+      return sendJson(res, 201, db.registerBrainSkill(body));
+    } catch (error) {
+      return sendJson(res, 400, {
+        error: "brain_skill_register_failed",
+        message: error.message,
+      });
+    }
+  }
+
+  if (method === "POST" && requestUrl.pathname === "/api/brain/skills/update-git") {
+    const body = await readBody(req);
+    try {
+      return sendJson(res, 200, db.updateBrainSkillFromGit(body));
+    } catch (error) {
+      return sendJson(res, 400, {
+        error: "brain_skill_update_failed",
         message: error.message,
       });
     }

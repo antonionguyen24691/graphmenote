@@ -1,8 +1,9 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const { DatabaseSync } = require("node:sqlite");
-const { spawn } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
 const { scanProjectPipeline } = require("./scanner");
 
 const ROOT = __dirname;
@@ -19,8 +20,11 @@ const DEFAULT_VAULT_DIRS = [
   "concepts",
   "sources",
   "analyses",
+  "skills",
+  path.join("skills", "_git"),
   path.join("templates", "projects"),
   path.join("templates", "modules"),
+  path.join("templates", "skills"),
 ];
 const MODULE_CAPABILITY_PATTERNS = [
   { capability: "map", keywords: ["map", "maplibre", "leaflet", "geo", "geocode", "location"] },
@@ -272,6 +276,36 @@ function initialize() {
       payload_json TEXT NOT NULL DEFAULT '{}'
     );
 
+    CREATE TABLE IF NOT EXISTS brain_skills (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      summary TEXT NOT NULL DEFAULT '',
+      source_url TEXT,
+      source_ref TEXT,
+      source_subdir TEXT,
+      local_path TEXT NOT NULL,
+      manifest_path TEXT,
+      entry_file TEXT,
+      capabilities_json TEXT NOT NULL DEFAULT '[]',
+      tags_json TEXT NOT NULL DEFAULT '[]',
+      usage_json TEXT NOT NULL DEFAULT '{}',
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      status TEXT NOT NULL DEFAULT 'active',
+      version_hash TEXT,
+      installed_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      last_indexed_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS brain_skill_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      skill_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      message TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      payload_json TEXT NOT NULL DEFAULT '{}'
+    );
+
     CREATE TABLE IF NOT EXISTS pipeline_cache (
       cache_key TEXT PRIMARY KEY,
       root_path TEXT NOT NULL,
@@ -290,8 +324,8 @@ function initialize() {
   }
 
   try {
-    if (getMeta("schemaVersion") !== "4") {
-      setMeta("schemaVersion", "4");
+    if (getMeta("schemaVersion") !== "5") {
+      setMeta("schemaVersion", "5");
     }
     ensureDefaultConfig();
     migrateFromLegacyJsonIfNeeded();
@@ -1205,10 +1239,262 @@ function scaffoldVault(rootPath) {
 ## Adoption History
 `
   );
+  writeUtf8FileIfMissing(
+    path.join(config.rootPath, "templates", "skills", "SKILL_TEMPLATE.md"),
+    `# {{skill_name}}
+
+## Summary
+
+## When To Use
+
+## Inputs
+
+## Workflow
+
+## Safety
+
+## Source
+`
+  );
+  writeUtf8FileIfMissing(
+    path.join(config.rootPath, "skills", "README.md"),
+    `# Brain Skills
+
+Skills imported from Git live here. Graph Memory indexes SKILL.md, README.md, package metadata, tags, and capabilities so IDE/CLI agents can retrieve compact usage guidance before opening raw files.
+`
+  );
 
   return {
     ...config,
     created: true,
+  };
+}
+
+function listBrainSkills(filters = {}) {
+  const query = normalizeOptionalText(filters.query)?.toLowerCase() || "";
+  const capability = sanitizeCapability(filters.capability || "");
+  const status = normalizeOptionalText(filters.status) || "active";
+  const limit = clampNumber(filters.limit, 12, 1, 80);
+  const rows = db
+    .prepare(`
+      SELECT *
+      FROM brain_skills
+      WHERE (? = '' OR status = ?)
+      ORDER BY updated_at DESC, name ASC
+    `)
+    .all(status, status)
+    .map(fromBrainSkillRow)
+    .filter((skill) => {
+      if (capability && !(skill.capabilities || []).includes(capability)) {
+        return false;
+      }
+      if (!query) {
+        return true;
+      }
+      return brainSkillMatchesQuery(skill, query);
+    })
+    .slice(0, limit);
+
+  return {
+    count: rows.length,
+    skills: rows,
+  };
+}
+
+function getBrainSkill(skillId) {
+  const row = db.prepare("SELECT * FROM brain_skills WHERE id = ?").get(skillId);
+  if (!row) {
+    return null;
+  }
+  const skill = fromBrainSkillRow(row);
+  return {
+    ...skill,
+    events: listBrainSkillEvents(skill.id, 20),
+  };
+}
+
+function updateBrainSkillFromGit(payload = {}) {
+  const sourceUrl = normalizeOptionalText(payload.sourceUrl || payload.gitUrl || payload.url);
+  if (!sourceUrl) {
+    throw new Error("sourceUrl la bat buoc.");
+  }
+  const sourceRef = normalizeOptionalText(payload.ref || payload.sourceRef || payload.branch) || "";
+  const sourceSubdir = normalizeSkillSubdir(payload.subdir || payload.sourceSubdir || "");
+  const explicitName = normalizeOptionalText(payload.name);
+  const skillId = buildBrainSkillId(explicitName || sourceUrl, sourceSubdir);
+  const config = getVaultConfig();
+  fs.mkdirSync(path.join(config.rootPath, "skills", "_git"), { recursive: true });
+  const cloneDir = path.join(config.rootPath, "skills", "_git", skillId);
+
+  let operation = "clone";
+  if (fs.existsSync(path.join(cloneDir, ".git"))) {
+    operation = "update";
+    runGitCommand(["-C", cloneDir, "fetch", "--all", "--tags", "--prune"]);
+    if (sourceRef) {
+      runGitCommand(["-C", cloneDir, "checkout", sourceRef]);
+    } else {
+      runGitCommand(["-C", cloneDir, "pull", "--ff-only"]);
+    }
+  } else {
+    fs.mkdirSync(path.dirname(cloneDir), { recursive: true });
+    runGitCommand(["clone", sourceUrl, cloneDir]);
+    if (sourceRef) {
+      runGitCommand(["-C", cloneDir, "checkout", sourceRef]);
+    }
+  }
+
+  const skillRoot = sourceSubdir ? path.join(cloneDir, sourceSubdir) : cloneDir;
+  if (!fs.existsSync(skillRoot) || !fs.statSync(skillRoot).isDirectory()) {
+    throw new Error(`Khong tim thay skill subdir: ${skillRoot}`);
+  }
+
+  const indexed = indexBrainSkillDirectory({
+    skillId,
+    rootPath: skillRoot,
+    sourceUrl,
+    sourceRef,
+    sourceSubdir,
+    explicitName,
+    metadata: payload.metadata || {},
+  });
+  insertBrainSkillEvent(indexed.id, operation, `${operation} skill from ${sourceUrl}`, {
+    sourceUrl,
+    sourceRef,
+    sourceSubdir,
+    versionHash: indexed.versionHash,
+  });
+  upsertBrainSkillNode(indexed);
+  appendVaultLog(`skill-${operation}`, `${indexed.name} | ${sourceUrl}`);
+  return {
+    operation,
+    skill: indexed,
+  };
+}
+
+function registerBrainSkill(payload = {}) {
+  const localPath = normalizeWorkspacePath(payload.localPath || payload.path || "");
+  if (!localPath) {
+    throw new Error("localPath la bat buoc.");
+  }
+  if (!fs.existsSync(localPath) || !fs.statSync(localPath).isDirectory()) {
+    throw new Error(`Khong tim thay thu muc skill: ${localPath}`);
+  }
+  const skillId = buildBrainSkillId(payload.name || localPath, "");
+  const indexed = indexBrainSkillDirectory({
+    skillId,
+    rootPath: localPath,
+    sourceUrl: normalizeOptionalText(payload.sourceUrl || ""),
+    sourceRef: normalizeOptionalText(payload.sourceRef || payload.ref || ""),
+    sourceSubdir: normalizeSkillSubdir(payload.sourceSubdir || payload.subdir || ""),
+    explicitName: normalizeOptionalText(payload.name),
+    metadata: payload.metadata || {},
+  });
+  insertBrainSkillEvent(indexed.id, "register", `registered local skill ${indexed.name}`, {
+    localPath,
+  });
+  upsertBrainSkillNode(indexed);
+  appendVaultLog("skill-register", `${indexed.name} | ${localPath}`);
+  return indexed;
+}
+
+function recommendBrainSkills(options = {}) {
+  const query = normalizeOptionalText(options.query) || "";
+  const capability = sanitizeCapability(options.capability || query);
+  const workspacePath = normalizeWorkspacePath(options.workspacePath || "");
+  const limit = clampNumber(options.limit, 5, 1, 20);
+  const skills = listBrainSkills({ status: "active", limit: 80 }).skills;
+  const scored = skills
+    .map((skill) => {
+      let score = 0;
+      const haystack = buildBrainSkillHaystack(skill);
+      if (capability && skill.capabilities.includes(capability)) score += 50;
+      if (query && haystack.includes(query.toLowerCase())) score += 24;
+      if (workspacePath && haystack.includes(path.basename(workspacePath).toLowerCase())) score += 6;
+      score += Math.min((skill.tags || []).length, 8);
+      score += skill.entryFile ? 4 : 0;
+      score += recencyScore(skill.updatedAt);
+      return {
+        ...skill,
+        score,
+        rationale: buildBrainSkillRationale(skill, { query, capability, workspacePath }),
+      };
+    })
+    .filter((skill) => skill.score > 0 || (!query && !capability))
+    .sort((left, right) => right.score - left.score || left.name.localeCompare(right.name))
+    .slice(0, limit);
+
+  return {
+    query,
+    capability,
+    count: scored.length,
+    skills: scored,
+  };
+}
+
+function getBrainContext(options = {}) {
+  const workspacePath = normalizeWorkspacePath(options.workspacePath || "");
+  if (!workspacePath) {
+    throw new Error("workspacePath la bat buoc.");
+  }
+  const query = normalizeOptionalText(options.query) || "";
+  const capability = sanitizeCapability(options.capability || query);
+  const lowToken = getLowTokenContext({
+    ...options,
+    workspacePath,
+    query,
+    capability,
+    moduleLimit: options.moduleLimit || 4,
+    matchLimit: options.matchLimit || 4,
+  });
+  const skillRecommendations = recommendBrainSkills({
+    workspacePath,
+    query,
+    capability,
+    limit: clampNumber(options.skillLimit, 5, 1, 12),
+  });
+  return {
+    workspacePath,
+    query,
+    capability,
+    brain: {
+      mode: "graph-memory-brain",
+      priorityOrder: [
+        "resume implementation thread",
+        "use recommended brain skill",
+        "reuse verified module",
+        "open smallest context window",
+        "only then inspect raw source",
+      ],
+      rules: [
+        "Do not read full repositories before checking this brain context.",
+        "Prefer skills with matching capability and recent verification/adoption memory.",
+        "If a useful skill is missing, import it with brain-skill-update and re-run brain-context.",
+      ],
+    },
+    skills: skillRecommendations.skills,
+    lowToken,
+    recommendations: [
+      skillRecommendations.skills.length
+        ? "Use brain.skills[0] as the first operating playbook before coding."
+        : "No matching brain skill found; install/update a skill from Git if this workflow repeats.",
+      ...(lowToken.recommendations || []),
+    ],
+    tokenEstimate: estimateContextTokens({
+      skills: skillRecommendations.skills.map((skill) => ({
+        id: skill.id,
+        name: skill.name,
+        summary: skill.summary,
+        capabilities: skill.capabilities,
+        usage: skill.usage,
+      })),
+      lowToken: {
+        project: lowToken.project,
+        recentWork: lowToken.recentWork,
+        implementation: lowToken.implementation?.primaryThread
+          ? compactImplementationThread(lowToken.implementation.primaryThread)
+          : null,
+      },
+    }),
   };
 }
 
@@ -1782,6 +2068,40 @@ function fromActivityRunRow(row) {
     startedAt: row.started_at,
     lastHeartbeatAt: row.last_heartbeat_at,
     endedAt: row.ended_at || null,
+  };
+}
+
+function fromBrainSkillRow(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    summary: row.summary || "",
+    sourceUrl: row.source_url || null,
+    sourceRef: row.source_ref || null,
+    sourceSubdir: row.source_subdir || null,
+    localPath: row.local_path,
+    manifestPath: row.manifest_path || null,
+    entryFile: row.entry_file || null,
+    capabilities: parseJsonArray(row.capabilities_json),
+    tags: parseJsonArray(row.tags_json),
+    usage: parseJsonObject(row.usage_json),
+    metadata: parseJsonObject(row.metadata_json),
+    status: row.status || "active",
+    versionHash: row.version_hash || null,
+    installedAt: row.installed_at,
+    updatedAt: row.updated_at,
+    lastIndexedAt: row.last_indexed_at,
+  };
+}
+
+function fromBrainSkillEventRow(row) {
+  return {
+    id: row.id,
+    skillId: row.skill_id,
+    kind: row.kind,
+    message: row.message,
+    createdAt: row.created_at,
+    payload: parseJsonObject(row.payload_json),
   };
 }
 
@@ -6239,6 +6559,373 @@ function writeUtf8FileIfMissing(filePath, content) {
   fs.writeFileSync(filePath, content, "utf8");
 }
 
+function appendVaultLog(kind, detail) {
+  try {
+    const config = getVaultConfig();
+    fs.mkdirSync(config.rootPath, { recursive: true });
+    const line = `\n## [${nowIso()}] ${kind}\n- ${detail}\n`;
+    fs.appendFileSync(config.logPath, line, "utf8");
+  } catch {}
+}
+
+function runGitCommand(args) {
+  const result = spawnSync("git", args, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.error) {
+    throw new Error(`git failed: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    throw new Error((result.stderr || result.stdout || `git ${args.join(" ")} failed`).trim());
+  }
+  return {
+    stdout: result.stdout || "",
+    stderr: result.stderr || "",
+  };
+}
+
+function buildBrainSkillId(value, subdir = "") {
+  const base = sanitizeId(path.basename(String(value || "skill").replace(/\.git$/i, ""))) || "skill";
+  const digest = crypto.createHash("sha1").update(`${value}::${subdir}`).digest("hex").slice(0, 10);
+  return `skill-${base}-${digest}`;
+}
+
+function normalizeSkillSubdir(value) {
+  const text = normalizeOptionalText(value);
+  if (!text) {
+    return "";
+  }
+  const normalized = text.replaceAll("\\", "/").replace(/^\/+|\/+$/g, "");
+  if (normalized.includes("..")) {
+    throw new Error("sourceSubdir khong duoc chua '..'.");
+  }
+  return normalized;
+}
+
+function indexBrainSkillDirectory(options = {}) {
+  const rootPath = normalizeWorkspacePath(options.rootPath || "");
+  if (!rootPath) {
+    throw new Error("rootPath skill la bat buoc.");
+  }
+  const manifest = readBrainSkillManifest(rootPath);
+  const packageInfo = readJsonFileIfExists(path.join(rootPath, "package.json")) || {};
+  const readmePath = findFirstExistingFile(rootPath, ["SKILL.md", "README.md", "readme.md"]);
+  const readmeContent = readmePath ? readTextFileHead(readmePath, 12000) : "";
+  const name = options.explicitName
+    || normalizeOptionalText(manifest.name)
+    || normalizeOptionalText(packageInfo.name)
+    || extractMarkdownTitle(readmeContent)
+    || path.basename(rootPath);
+  const summary = normalizeOptionalText(manifest.summary || manifest.description)
+    || normalizeOptionalText(packageInfo.description)
+    || extractMarkdownSummary(readmeContent)
+    || "Reusable brain skill imported into Graph Memory.";
+  const capabilities = uniqueStrings([
+    ...normalizeStringArray(manifest.capabilities),
+    ...normalizeStringArray(manifest.skills),
+    ...inferCapabilitiesFromText(`${name} ${summary} ${readmeContent.slice(0, 2000)}`),
+  ]).slice(0, 12);
+  const tags = uniqueStrings([
+    ...normalizeStringArray(manifest.tags),
+    ...normalizeStringArray(packageInfo.keywords),
+    ...capabilities,
+  ]).slice(0, 20);
+  const usage = {
+    whenToUse: normalizeStringArray(manifest.whenToUse || manifest.when_to_use),
+    inputs: normalizeStringArray(manifest.inputs),
+    workflow: extractMarkdownSectionList(readmeContent, "Workflow").slice(0, 8),
+    safety: extractMarkdownSectionList(readmeContent, "Safety").slice(0, 6),
+  };
+  const versionHash = getGitHeadHash(rootPath) || hashSkillDirectory(rootPath);
+  const now = nowIso();
+  const existing = db.prepare("SELECT * FROM brain_skills WHERE id = ?").get(options.skillId);
+  const installedAt = existing?.installed_at || now;
+  const skill = {
+    id: options.skillId,
+    name,
+    summary,
+    sourceUrl: normalizeOptionalText(options.sourceUrl || ""),
+    sourceRef: normalizeOptionalText(options.sourceRef || ""),
+    sourceSubdir: normalizeSkillSubdir(options.sourceSubdir || ""),
+    localPath: rootPath,
+    manifestPath: manifest.__path || null,
+    entryFile: readmePath || null,
+    capabilities,
+    tags,
+    usage,
+    metadata: {
+      ...(options.metadata || {}),
+      packageName: packageInfo.name || null,
+      packageVersion: packageInfo.version || null,
+      indexedBy: "graph-memory",
+    },
+    status: "active",
+    versionHash,
+    installedAt,
+    updatedAt: now,
+    lastIndexedAt: now,
+  };
+
+  db.prepare(`
+    INSERT INTO brain_skills (
+      id, name, summary, source_url, source_ref, source_subdir, local_path,
+      manifest_path, entry_file, capabilities_json, tags_json, usage_json,
+      metadata_json, status, version_hash, installed_at, updated_at, last_indexed_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      name = excluded.name,
+      summary = excluded.summary,
+      source_url = excluded.source_url,
+      source_ref = excluded.source_ref,
+      source_subdir = excluded.source_subdir,
+      local_path = excluded.local_path,
+      manifest_path = excluded.manifest_path,
+      entry_file = excluded.entry_file,
+      capabilities_json = excluded.capabilities_json,
+      tags_json = excluded.tags_json,
+      usage_json = excluded.usage_json,
+      metadata_json = excluded.metadata_json,
+      status = excluded.status,
+      version_hash = excluded.version_hash,
+      updated_at = excluded.updated_at,
+      last_indexed_at = excluded.last_indexed_at
+  `).run(
+    skill.id,
+    skill.name,
+    skill.summary,
+    skill.sourceUrl,
+    skill.sourceRef,
+    skill.sourceSubdir,
+    skill.localPath,
+    skill.manifestPath,
+    skill.entryFile,
+    JSON.stringify(skill.capabilities),
+    JSON.stringify(skill.tags),
+    JSON.stringify(skill.usage),
+    JSON.stringify(skill.metadata),
+    skill.status,
+    skill.versionHash,
+    skill.installedAt,
+    skill.updatedAt,
+    skill.lastIndexedAt
+  );
+  return skill;
+}
+
+function readBrainSkillManifest(rootPath) {
+  const manifestPath = findFirstExistingFile(rootPath, [
+    "skill.json",
+    "graph-skill.json",
+    path.join(".graph", "skill.json"),
+  ]);
+  if (!manifestPath) {
+    return {};
+  }
+  const parsed = readJsonFileIfExists(manifestPath) || {};
+  return {
+    ...parsed,
+    __path: manifestPath,
+  };
+}
+
+function findFirstExistingFile(rootPath, candidates) {
+  for (const candidate of candidates) {
+    const filePath = path.join(rootPath, candidate);
+    if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+      return filePath;
+    }
+  }
+  return null;
+}
+
+function readJsonFileIfExists(filePath) {
+  try {
+    if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+      return null;
+    }
+    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function readTextFileHead(filePath, maxBytes = 12000) {
+  try {
+    const buffer = fs.readFileSync(filePath);
+    return buffer.subarray(0, maxBytes).toString("utf8");
+  } catch {
+    return "";
+  }
+}
+
+function extractMarkdownTitle(content) {
+  const match = String(content || "").match(/^#\s+(.+)$/m);
+  return normalizeOptionalText(match?.[1]);
+}
+
+function extractMarkdownSummary(content) {
+  const lines = String(content || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#") && !line.startsWith("```"));
+  return normalizeOptionalText(lines[0]) || "";
+}
+
+function extractMarkdownSectionList(content, sectionName) {
+  const lines = String(content || "").split(/\r?\n/);
+  const target = sectionName.toLowerCase();
+  const items = [];
+  let inSection = false;
+  for (const line of lines) {
+    const heading = line.match(/^#{2,4}\s+(.+)$/);
+    if (heading) {
+      inSection = heading[1].trim().toLowerCase().includes(target);
+      continue;
+    }
+    if (!inSection) {
+      continue;
+    }
+    const item = line.match(/^\s*[-*]\s+(.+)$/);
+    if (item) {
+      items.push(item[1].trim());
+    }
+  }
+  return items;
+}
+
+function getGitHeadHash(rootPath) {
+  try {
+    const result = spawnSync("git", ["-C", rootPath, "rev-parse", "--short", "HEAD"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return result.status === 0 ? normalizeOptionalText(result.stdout) : null;
+  } catch {
+    return null;
+  }
+}
+
+function hashSkillDirectory(rootPath) {
+  const hash = crypto.createHash("sha1");
+  const files = [];
+  collectSkillHashFiles(rootPath, files, 0);
+  files.sort().slice(0, 40).forEach((filePath) => {
+    hash.update(path.relative(rootPath, filePath));
+    hash.update(readTextFileHead(filePath, 16000));
+  });
+  return hash.digest("hex").slice(0, 12);
+}
+
+function collectSkillHashFiles(rootPath, files, depth) {
+  if (depth > 3 || !fs.existsSync(rootPath)) {
+    return;
+  }
+  for (const entry of fs.readdirSync(rootPath, { withFileTypes: true })) {
+    if (entry.name === ".git" || entry.name === "node_modules" || entry.name.startsWith(".")) {
+      continue;
+    }
+    const entryPath = path.join(rootPath, entry.name);
+    if (entry.isDirectory()) {
+      collectSkillHashFiles(entryPath, files, depth + 1);
+      continue;
+    }
+    if (/\.(md|json|ya?ml|js|ts|py|txt)$/i.test(entry.name)) {
+      files.push(entryPath);
+    }
+  }
+}
+
+function insertBrainSkillEvent(skillId, kind, message, payload = {}) {
+  db.prepare(`
+    INSERT INTO brain_skill_events (
+      skill_id, kind, message, created_at, payload_json
+    ) VALUES (?, ?, ?, ?, ?)
+  `).run(skillId, kind, message, nowIso(), JSON.stringify(payload || {}));
+}
+
+function listBrainSkillEvents(skillId, limit = 20) {
+  return db
+    .prepare(`
+      SELECT *
+      FROM brain_skill_events
+      WHERE skill_id = ?
+      ORDER BY created_at DESC, id DESC
+      LIMIT ?
+    `)
+    .all(skillId, clampNumber(limit, 20, 1, 100))
+    .map(fromBrainSkillEventRow);
+}
+
+function upsertBrainSkillNode(skill) {
+  const nodeId = `brain-${skill.id}`;
+  const existing = getNode(nodeId);
+  const node = {
+    id: nodeId,
+    parentId: null,
+    name: skill.name,
+    type: "skill",
+    summary: skill.summary,
+    severity: "low",
+    openIssues: 0,
+    files: uniqueStrings([skill.localPath, skill.entryFile].filter(Boolean)),
+    relations: [],
+    contextWindow: [
+      { label: "Brain skill", detail: skill.name },
+      ...(skill.sourceUrl ? [{ label: "Git source", detail: skill.sourceUrl }] : []),
+      ...(skill.capabilities.length ? [{ label: "Capabilities", detail: skill.capabilities.join(", ") }] : []),
+      ...(skill.tags.length ? [{ label: "Tags", detail: skill.tags.join(", ") }] : []),
+      ...(skill.entryFile ? [{ label: "Entry file", detail: skill.entryFile }] : []),
+      ...(skill.versionHash ? [{ label: "Version", detail: skill.versionHash }] : []),
+    ],
+    debugSignals: existing?.debugSignals || [],
+    chatHistory: existing?.chatHistory || [],
+    notes: existing?.notes || [],
+  };
+  if (existing) {
+    updateNode({ ...existing, ...node });
+  } else {
+    insertNode(node);
+  }
+}
+
+function brainSkillMatchesQuery(skill, query) {
+  return buildBrainSkillHaystack(skill).includes(String(query || "").toLowerCase());
+}
+
+function buildBrainSkillHaystack(skill) {
+  return [
+    skill.name,
+    skill.summary,
+    skill.sourceUrl,
+    skill.localPath,
+    ...(skill.capabilities || []),
+    ...(skill.tags || []),
+    ...(skill.usage?.whenToUse || []),
+    ...(skill.usage?.workflow || []),
+    ...(skill.usage?.safety || []),
+  ]
+    .join(" ")
+    .toLowerCase();
+}
+
+function buildBrainSkillRationale(skill, criteria = {}) {
+  const reasons = [];
+  if (criteria.capability && skill.capabilities.includes(criteria.capability)) {
+    reasons.push(`matches capability ${criteria.capability}`);
+  }
+  if (criteria.query && brainSkillMatchesQuery(skill, criteria.query)) {
+    reasons.push(`matches query ${criteria.query}`);
+  }
+  if (skill.versionHash) {
+    reasons.push(`indexed version ${skill.versionHash}`);
+  }
+  if (skill.entryFile) {
+    reasons.push(`entry ${path.basename(skill.entryFile)}`);
+  }
+  return reasons.length ? reasons : ["available active brain skill"];
+}
+
 function nodeMatchesWorkspace(node, workspacePath) {
   const normalizedWorkspace = normalizePath(workspacePath);
   return (node.files || []).some((file) => {
@@ -7183,6 +7870,12 @@ function getLowTokenContext(options = {}) {
     recentLimit: 2,
     eventLimit: 4,
   });
+  const brainSkills = recommendBrainSkills({
+    workspacePath,
+    capability,
+    query,
+    limit: clampNumber(options.skillLimit, 4, 1, 10),
+  });
   const projectNode = bootstrap.projectId ? getNode(bootstrap.projectId) : null;
 
   return {
@@ -7196,6 +7889,7 @@ function getLowTokenContext(options = {}) {
         }
       : null,
     recentWork: bootstrap.recentWork,
+    brainSkills: brainSkills.skills,
     reusableModules: reusable.modules,
     projectMatches: projectMatches.matches,
     adoptionRecipes: projectMatches.matches.slice(0, 3).map((match) => ({
@@ -7235,6 +7929,9 @@ function getLowTokenContext(options = {}) {
         : reusable.modules.length
           ? "Check reusableModules first before generating new code."
           : "No strong reusable module match found; continue with focused context retrieval.",
+      brainSkills.skills.length
+        ? "Check brainSkills first for the operating playbook before opening raw code."
+        : "If this workflow repeats, add a brain skill from Git and re-run low-token context.",
       projectMatches.matches.some((match) => match.adoptionRecipe?.checklist?.length)
         ? "Use adoptionRecipes as the default integration checklist before opening raw history."
         : "If no recipe exists yet, inspect module cards and adoption memory together.",
@@ -7255,6 +7952,12 @@ function getLowTokenContext(options = {}) {
     ],
     tokenEstimate: estimateContextTokens({
       recentWork: bootstrap.recentWork,
+      brainSkills: brainSkills.skills.slice(0, 3).map((skill) => ({
+        id: skill.id,
+        name: skill.name,
+        summary: skill.summary,
+        capabilities: skill.capabilities,
+      })),
       reusableModules: reusable.modules,
       projectMatches: projectMatches.matches,
       adoptionRecipes: projectMatches.matches.slice(0, 2).map((match) => ({
@@ -7494,6 +8197,9 @@ function compactPipelineCache(keep = 40) {
 }
 
 function clampNumber(value, fallback, min, max) {
+  if (value === undefined || value === null || String(value).trim() === "") {
+    return fallback;
+  }
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) {
     return fallback;
@@ -7546,6 +8252,8 @@ module.exports = {
   exportGraph,
   finishActivity,
   getActivityOverview,
+  getBrainContext,
+  getBrainSkill,
   getImplementationContext,
   getActivityRun,
   getContextWindow,
@@ -7569,6 +8277,7 @@ module.exports = {
   importGraph,
   listImplementationThreads,
   listActivityRuns,
+  listBrainSkills,
   listModuleAdoptions,
   listReusableModules,
   matchProjectToReusableModules,
@@ -7576,6 +8285,8 @@ module.exports = {
   recordError,
   recordModuleAdoption,
   recordModuleVerification,
+  recommendBrainSkills,
+  registerBrainSkill,
   registerReusableModule,
   openStorageFolder,
   repairGraphTopology,
@@ -7588,6 +8299,7 @@ module.exports = {
   setActiveNode,
   scaffoldVault,
   startActivity,
+  updateBrainSkillFromGit,
   savePipelineCache,
   findReusableModules,
   traceNodes,

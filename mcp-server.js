@@ -768,6 +768,84 @@ server.tool(
 );
 
 server.tool(
+  "brain_context",
+  "Return the highest-level Graph Memory brain context: resumable task, recommended skills, reusable modules, verification memory, and low-token file hints.",
+  {
+    workspacePath: z.string().describe("Workspace root to summarize"),
+    capability: z.string().optional().describe("Optional desired capability such as ocr, map, auth, testing"),
+    query: z.string().optional().describe("Optional task query"),
+    file: z.string().optional().describe("Optional file focus"),
+    location: z.string().optional().describe("Optional location focus"),
+    skillLimit: z.number().optional().describe("Brain skill recommendation limit"),
+    moduleLimit: z.number().optional().describe("Reusable module limit"),
+  },
+  async ({ workspacePath, capability, query, file, location, skillLimit, moduleLimit }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(db.getBrainContext({ workspacePath, capability, query, file, location, skillLimit, moduleLimit }), null, 2),
+      },
+    ],
+  })
+);
+
+server.tool(
+  "list_brain_skills",
+  "List installed Brain Skills indexed from the external vault or Git repositories.",
+  {
+    capability: z.string().optional().describe("Optional capability filter"),
+    query: z.string().optional().describe("Optional keyword query"),
+    status: z.string().optional().describe("Skill status, defaults to active"),
+    limit: z.number().optional().describe("Maximum skills to return"),
+  },
+  async ({ capability, query, status, limit }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(db.listBrainSkills({ capability, query, status, limit }), null, 2),
+      },
+    ],
+  })
+);
+
+server.tool(
+  "update_brain_skill_from_git",
+  "Clone or update a Brain Skill from a Git repository, index SKILL.md/README/package metadata, and make it available to future IDE/CLI agents.",
+  {
+    sourceUrl: z.string().describe("Git repository URL"),
+    ref: z.string().optional().describe("Optional branch, tag, or commit"),
+    subdir: z.string().optional().describe("Optional subdirectory inside the repo that contains the skill"),
+    name: z.string().optional().describe("Optional display name"),
+  },
+  async ({ sourceUrl, ref, subdir, name }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(db.updateBrainSkillFromGit({ sourceUrl, ref, subdir, name }), null, 2),
+      },
+    ],
+  })
+);
+
+server.tool(
+  "register_local_brain_skill",
+  "Register a local folder as a Brain Skill and index its SKILL.md/README/package metadata.",
+  {
+    localPath: z.string().describe("Local folder containing the skill"),
+    name: z.string().optional().describe("Optional display name"),
+    sourceUrl: z.string().optional().describe("Optional origin URL"),
+  },
+  async ({ localPath, name, sourceUrl }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(db.registerBrainSkill({ localPath, name, sourceUrl }), null, 2),
+      },
+    ],
+  })
+);
+
+server.tool(
   "implementation_context",
   "Return resumable implementation threads, current step, next step, blockers, and recent checkpoints so another IDE or CLI can continue work with minimal tokens.",
   {

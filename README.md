@@ -61,6 +61,7 @@ Graph Memory da co them lop tri thuc ben ngoai repo code de phuc vu workflow "LL
 
 - `External vault`: Obsidian-style vault luu o working directory rieng cho artifact markdown.
 - `Reusable modules`: registry cho module/co nang co the tai su dung nhu `map`, `ocr`, `auth`, `upload`, `pdf`.
+- `Brain skills`: registry skill/playbook co the import tu Git vao vault, index thanh bo nho dung chung cho IDE/CLI/MCP.
 - `Low-token context`: bootstrap payload gon cho IDE/CLI, uu tien memory + module candidates truoc khi doc source sau.
 
 ### Vault config va scaffold
@@ -94,6 +95,26 @@ Payload low-token gom:
 - reusable module candidates
 - compact debug context + recommended files
 - token estimate de giam context load
+
+### Brain context + Git skills
+
+- HTTP:
+  - `GET /api/brain/context`
+  - `GET /api/brain/skills`
+  - `POST /api/brain/skills/register`
+  - `POST /api/brain/skills/update-git`
+- CLI:
+  - `node graph-cli.js brain-context --workspacePath "C:\repo\stock" --query ocr`
+  - `node graph-cli.js brain-skills --query testing`
+  - `node graph-cli.js brain-skill-register "C:\skills\my-skill" --name "My Skill"`
+  - `node graph-cli.js brain-skill-update https://github.com/org/repo.git --subdir skills/ocr --ref main --name "OCR Skill"`
+- MCP:
+  - `brain_context`
+  - `list_brain_skills`
+  - `register_local_brain_skill`
+  - `update_brain_skill_from_git`
+
+Skill Git duoc clone/pull vao `vault/skills/_git`, doc metadata tu `skill.json`, `SKILL.md`, `README.md`, va `package.json`, roi dua vao `brain-context` de agent dung nhu playbook truoc khi mo source code.
 
 ## Chay local
 

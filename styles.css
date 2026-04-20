@@ -1205,6 +1205,48 @@ textarea {
   transform-origin: 0 0;
 }
 
+.graph-orbit-guides {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+  opacity: 0.78;
+}
+
+.graph-orbit-guide ellipse {
+  fill: none;
+  stroke: rgba(130, 176, 225, 0.15);
+  stroke-width: 1.1;
+  stroke-dasharray: 10 12;
+}
+
+.graph-orbit-guide text {
+  fill: rgba(196, 211, 230, 0.44);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.graph-orbit-guide--nucleus ellipse {
+  stroke: rgba(125, 195, 255, 0.24);
+  stroke-dasharray: 4 8;
+}
+
+.graph-orbit-guide--file ellipse {
+  stroke: rgba(255, 221, 91, 0.18);
+}
+
+.graph-orbit-guide--signal ellipse {
+  stroke: rgba(104, 229, 170, 0.18);
+}
+
+.graph-orbit-guide--related ellipse {
+  stroke: rgba(255, 157, 96, 0.16);
+}
+
 .graph-edges {
   position: absolute;
   inset: 0;
@@ -1376,6 +1418,12 @@ textarea {
   stroke-width: 1.4;
   stroke-linecap: round;
   fill: none;
+  vector-effect: non-scaling-stroke;
+}
+
+.graph-edge-group.is-bundled .graph-edge {
+  stroke-width: 1.15;
+  opacity: 0.7;
 }
 
 .graph-edge--parent {
@@ -1405,6 +1453,9 @@ textarea {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   fill: rgba(230, 236, 244, 0.66);
+  paint-order: stroke;
+  stroke: rgba(20, 26, 35, 0.72);
+  stroke-width: 3px;
 }
 
 .graph-node {

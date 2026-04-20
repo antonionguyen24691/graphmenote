@@ -166,6 +166,38 @@ function handleLocalRequest(requestPath, options = {}) {
     });
   }
 
+  if (method === "GET" && requestUrl.pathname === "/api/brain/context") {
+    return db.getBrainContext({
+      workspacePath: (requestUrl.searchParams.get("workspacePath") || "").trim(),
+      capability: (requestUrl.searchParams.get("capability") || "").trim(),
+      query: (requestUrl.searchParams.get("query") || "").trim(),
+      file: (requestUrl.searchParams.get("file") || "").trim(),
+      location: (requestUrl.searchParams.get("location") || "").trim(),
+      skillLimit: requestUrl.searchParams.get("skillLimit"),
+      moduleLimit: requestUrl.searchParams.get("moduleLimit"),
+    });
+  }
+
+  if (method === "GET" && requestUrl.pathname === "/api/brain/skills") {
+    return db.listBrainSkills({
+      workspacePath: (requestUrl.searchParams.get("workspacePath") || "").trim(),
+      capability: (requestUrl.searchParams.get("capability") || "").trim(),
+      query: (requestUrl.searchParams.get("query") || "").trim(),
+      status: (requestUrl.searchParams.get("status") || "active").trim(),
+      limit: requestUrl.searchParams.get("limit"),
+    });
+  }
+
+  if (method === "GET" && requestUrl.pathname === "/api/brain/skill") {
+    const skill = db.getBrainSkill((requestUrl.searchParams.get("skillId") || "").trim());
+    if (!skill) {
+      const error = new Error("skill_not_found");
+      error.status = 404;
+      throw error;
+    }
+    return skill;
+  }
+
   if (method === "GET" && requestUrl.pathname === "/api/project-module-match") {
     return db.matchProjectToReusableModules({
       workspacePath: (requestUrl.searchParams.get("workspacePath") || "").trim(),
@@ -422,6 +454,14 @@ function handleLocalRequest(requestPath, options = {}) {
     );
   }
 
+  if (method === "POST" && requestUrl.pathname === "/api/brain/skills/register") {
+    return safelyHandleLocalMutation(() => db.registerBrainSkill(body), 400, "brain_skill_register_failed");
+  }
+
+  if (method === "POST" && requestUrl.pathname === "/api/brain/skills/update-git") {
+    return safelyHandleLocalMutation(() => db.updateBrainSkillFromGit(body), 400, "brain_skill_update_failed");
+  }
+
   if (method === "POST" && requestUrl.pathname === "/api/record-edit") {
     return safelyHandleLocalMutation(() => db.recordEdit(body), 400, "record_edit_failed");
   }
@@ -647,6 +687,32 @@ async function getActivityOverview() {
 
 async function findReusableModules(filters = {}) {
   return request(`/api/reusable-modules${toQueryString(filters)}`);
+}
+
+async function getBrainContext(filters = {}) {
+  return request(`/api/brain/context${toQueryString(filters)}`);
+}
+
+async function listBrainSkills(filters = {}) {
+  return request(`/api/brain/skills${toQueryString(filters)}`);
+}
+
+async function getBrainSkill(skillId) {
+  return request(`/api/brain/skill${toQueryString({ skillId })}`);
+}
+
+async function registerBrainSkill(payload = {}) {
+  return request("/api/brain/skills/register", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+async function updateBrainSkillFromGit(payload = {}) {
+  return request("/api/brain/skills/update-git", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 async function matchProjectToReusableModules(filters = {}) {
@@ -879,6 +945,8 @@ module.exports = {
   exportGraph,
   finishActivity,
   getActivityOverview,
+  getBrainContext,
+  getBrainSkill,
   getContextWindow,
   getContextGraph,
   getDebugContext,
@@ -899,9 +967,11 @@ module.exports = {
   cleanupModuleRegistry,
   importGraph,
   listActivityRuns,
+  listBrainSkills,
   openStorageFolder,
   recordEdit,
   recordError,
+  registerBrainSkill,
   registerReusableModule,
   restoreLatestBackup,
   searchNodes,
@@ -917,6 +987,7 @@ module.exports = {
   recordModuleVerification,
   traceNode,
   traceExecution,
+  updateBrainSkillFromGit,
   upsertImplementationThread,
   upsertNodeFromTrace,
 };

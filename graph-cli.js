@@ -94,6 +94,34 @@ async function main() {
       print(await client.findReusableModules(parseFlags(args)));
       return;
 
+    case "brain-context":
+      print(await client.getBrainContext(parseFlags(args)));
+      return;
+
+    case "brain-skills":
+      print(await client.listBrainSkills(parseFlags(args)));
+      return;
+
+    case "brain-skill": {
+      ensure(args[0], "Can truyen skillId.");
+      print(await client.getBrainSkill(args[0]));
+      return;
+    }
+
+    case "brain-skill-register": {
+      const localPath = args[0];
+      ensure(localPath, "Can truyen localPath.");
+      print(await client.registerBrainSkill({ localPath, ...parseFlags(args.slice(1)) }));
+      return;
+    }
+
+    case "brain-skill-update": {
+      const sourceUrl = args[0];
+      ensure(sourceUrl, "Can truyen sourceUrl.");
+      print(await client.updateBrainSkillFromGit({ sourceUrl, ...parseFlags(args.slice(1)) }));
+      return;
+    }
+
     case "project-match":
       print(await client.matchProjectToReusableModules({
         workspacePath: args[0],
@@ -513,6 +541,11 @@ Usage:
   node graph-cli.js run "C:\\repo" codex npm run dev
   node graph-cli.js open-folder exports
   node graph-cli.js crawl-projects "C:\\Users\\DELL\\OneDrive\\Desktop\\sang kein" 3
+  node graph-cli.js brain-context --workspacePath "C:\\repo\\stock" --query ocr
+  node graph-cli.js brain-skills --query testing
+  node graph-cli.js brain-skill skill-testing-abc123
+  node graph-cli.js brain-skill-register "C:\\skills\\my-skill" --name My Skill
+  node graph-cli.js brain-skill-update https://github.com/org/repo.git --subdir skills/ocr --ref main --name OCR Skill
   node graph-cli.js modules --capability ocr --workspacePath "C:\\repo\\new-app"
   node graph-cli.js project-match "C:\\repo\\new-app" --query ocr
   node graph-cli.js module-adoptions --workspacePath "C:\\repo\\new-app"

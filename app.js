@@ -16,6 +16,10 @@ let graphSelectionLoadTimer = null;
 let graphSelectionAbortController = null;
 let graphSelectionRequestVersion = 0;
 let graphLayout = {};
+let graphRenderFrame = null;
+let graphRenderFrameOptions = null;
+let graphPhysicsFrame = null;
+let graphPhysicsTicksRemaining = 0;
 let viewState = {
   scale: 1,
   offsetX: 0,
@@ -48,7 +52,7 @@ let graphUiState = {
 
 const GRAPH_SCENE_WIDTH = 1600;
 const GRAPH_SCENE_HEIGHT = 1100;
-const GRAPH_LAYOUT_VERSION = "v6";
+const GRAPH_LAYOUT_VERSION = "v7";
 const GRAPH_LAYOUT_STORAGE_KEY = "graph-memory-layout-v3";
 const GRAPH_UI_STORAGE_KEY = "graph-memory-ui-v3";
 
@@ -56,6 +60,7 @@ const searchInput = document.getElementById("searchInput");
 const nodeList = document.getElementById("nodeList");
 const graphViewport = document.getElementById("graphViewport");
 const graphScene = document.getElementById("graphScene");
+const graphOrbitGuides = document.getElementById("graphOrbitGuides");
 const graphEdges = document.getElementById("graphEdges");
 const graphNodes = document.getElementById("graphNodes");
 const nodeCount = document.getElementById("nodeCount");
@@ -144,11 +149,7 @@ const brainLegend = document.getElementById("brainLegend");
 
 searchInput.addEventListener("input", () => {
   render();
-  window.clearTimeout(lowTokenReloadTimer);
-  lowTokenReloadTimer = window.setTimeout(async () => {
-    await loadLowTokenContext({ force: true });
-    renderCommandCenter();
-  }, 220);
+  scheduleLowTokenContextRefresh({ force: true, delayMs: 350 });
 });
 noteForm.addEventListener("submit", handleNoteSubmit);
 exportButton.addEventListener("click", handleExport);
@@ -296,17 +297,21 @@ async function bootstrap() {
   hydrateGraphPreferences();
   setGraphInteractionMode(graphInteractionMode);
   await Promise.all([loadGraph(), loadStorageInfo(), loadActivityOverview()]);
-  await loadLowTokenContext({ force: true });
-  if (store.activeNodeId) {
-    graphFocusNodeId = store.activeNodeId;
-    await loadContextGraph(store.activeNodeId);
-  }
   seedDefaultCrawlRoot();
   render();
   renderStorage();
   renderActivityOverview();
   renderCommandCenter();
+  void hydrateDashboardContextAfterInitialRender();
   window.setInterval(syncGraphState, 3000);
+}
+
+async function hydrateDashboardContextAfterInitialRender() {
+  scheduleLowTokenContextRefresh({ force: true, delayMs: 2500 });
+  if (store.activeNodeId) {
+    graphFocusNodeId = store.activeNodeId;
+  }
+  renderCommandCenter();
 }
 
 function hydrateGraphPreferences() {
@@ -496,6 +501,17 @@ async function loadLowTokenContext(options = {}) {
     };
     return null;
   }
+}
+
+function scheduleLowTokenContextRefresh(options = {}) {
+  if (lowTokenReloadTimer) {
+    window.clearTimeout(lowTokenReloadTimer);
+  }
+  lowTokenReloadTimer = window.setTimeout(async () => {
+    lowTokenReloadTimer = null;
+    await loadLowTokenContext({ force: Boolean(options.force) });
+    renderCommandCenter();
+  }, options.delayMs ?? 1000);
 }
 
 async function syncGraphState() {
@@ -1607,6 +1623,70 @@ function scheduleGraphNodeActivation(nodeId, options = {}) {
   });
 }
 
+function cancelPendingGraphSelection() {
+  if (graphSelectionLoadTimer) {
+    window.clearTimeout(graphSelectionLoadTimer);
+    graphSelectionLoadTimer = null;
+  }
+  if (graphSelectionAbortController) {
+    graphSelectionAbortController.abort();
+    graphSelectionAbortController = null;
+  }
+}
+
+function scheduleGraphMapRender(options = {}) {
+  graphRenderFrameOptions = {
+    skipSimulation: Boolean(options.skipSimulation),
+  };
+  if (graphRenderFrame) {
+    return;
+  }
+  graphRenderFrame = window.requestAnimationFrame(() => {
+    graphRenderFrame = null;
+    const nextOptions = graphRenderFrameOptions || {};
+    graphRenderFrameOptions = null;
+    if (!currentDisplayGraph) {
+      return;
+    }
+    renderGraphMap(currentDisplayGraph, store.activeNodeId, nextOptions);
+    bindNodeSelection();
+  });
+}
+
+function startGraphPhysicsAnimation(tickCount = 20) {
+  if (!currentDisplayGraph?.nodes?.length || graphUiState.layoutMode === "performance") {
+    return;
+  }
+  graphPhysicsTicksRemaining = Math.max(graphPhysicsTicksRemaining, tickCount);
+  if (graphPhysicsFrame) {
+    return;
+  }
+  const step = () => {
+    graphPhysicsFrame = null;
+    if (!currentDisplayGraph?.nodes?.length || graphPhysicsTicksRemaining <= 0 || dragState) {
+      graphPhysicsTicksRemaining = 0;
+      return;
+    }
+    graphPhysicsTicksRemaining -= 1;
+    runGraphPhysicsTick(currentDisplayGraph);
+    scheduleGraphMapRender({ skipSimulation: true });
+    if (graphPhysicsTicksRemaining > 0) {
+      graphPhysicsFrame = window.requestAnimationFrame(step);
+    } else {
+      persistGraphPreferences();
+    }
+  };
+  graphPhysicsFrame = window.requestAnimationFrame(step);
+}
+
+function stopGraphPhysicsAnimation() {
+  graphPhysicsTicksRemaining = 0;
+  if (graphPhysicsFrame) {
+    window.cancelAnimationFrame(graphPhysicsFrame);
+    graphPhysicsFrame = null;
+  }
+}
+
 function handleGraphNodeClick(nodeId, event) {
   const keepMultiSelect = Boolean(event?.shiftKey);
   const displayNode = currentDisplayGraph?.nodes?.find((node) => node.id === nodeId);
@@ -1629,6 +1709,7 @@ function handleGraphNodeClick(nodeId, event) {
   selectedGraphNodeId = nodeId;
   graphFocusNodeId = null;
   focusedContextGraph = null;
+  cancelPendingGraphSelection();
 
   if (graphInteractionMode === "pin") {
     togglePinnedNode(nodeId, { skipRender: true });
@@ -1895,10 +1976,7 @@ async function selectNode(nodeId, options = {}) {
   }
 
   selectedGraphNodeId = nodeId;
-  if (graphSelectionLoadTimer) {
-    window.clearTimeout(graphSelectionLoadTimer);
-    graphSelectionLoadTimer = null;
-  }
+  cancelPendingGraphSelection();
   const requestVersion = ++graphSelectionRequestVersion;
 
   if (options.defer) {
@@ -1910,9 +1988,6 @@ async function selectNode(nodeId, options = {}) {
     focusedContextGraph = null;
   }
 
-  if (graphSelectionAbortController) {
-    graphSelectionAbortController.abort();
-  }
   const controller = new AbortController();
   graphSelectionAbortController = controller;
 
@@ -1951,11 +2026,8 @@ async function selectNode(nodeId, options = {}) {
         return;
       }
     }
-    await loadLowTokenContext();
-    if (requestVersion !== graphSelectionRequestVersion || controller.signal.aborted) {
-      return;
-    }
     render();
+    scheduleLowTokenContextRefresh({ delayMs: 2500 });
     if (options.syncPipeline) {
       await notifyPipelineOverviewSync(nodeId);
     }
@@ -2196,9 +2268,15 @@ function buildDisplayGraph(nodes, activeNodeId, focusNodeId, hasQuery) {
 }
 
 function buildGlobalGraph(nodes, activeNodeId, hasQuery) {
+  const pinnedVisibleIds = new Set([
+    activeNodeId,
+    selectedGraphNodeId,
+    ...selectedGraphNodeIds,
+    ...promotedGraphNodeIds,
+  ].filter(Boolean));
   const visibleNodes = hasQuery
     ? nodes
-    : nodes.filter((node) => !["file", "error", "edit"].includes(node.type));
+    : nodes.filter((node) => pinnedVisibleIds.has(node.id) || !["file", "error", "edit"].includes(node.type));
   const normalizedSource = visibleNodes.length ? visibleNodes : nodes;
 
   const normalizedNodes = normalizedSource.map((node) => ({
@@ -2663,6 +2741,7 @@ function buildGraphMetrics(nodes) {
 
 function renderGraphMap(displayGraph, activeNodeId, options = {}) {
   if (!displayGraph?.nodes?.length) {
+    graphOrbitGuides.innerHTML = "";
     graphEdges.innerHTML = "";
     graphNodes.innerHTML = `<p class="empty-state">Graph canvas dang trong.</p>`;
     graphMinimap.innerHTML = "";
@@ -2682,9 +2761,12 @@ function renderGraphMap(displayGraph, activeNodeId, options = {}) {
 
   const nodesById = new Map(displayGraph.nodes.map((node) => [node.id, node]));
   const linkedIds = new Set(displayGraph.edges.flatMap((edge) => [edge.source, edge.target]));
+  const edgeBundleMeta = buildGraphEdgeBundleMeta(displayGraph.edges);
+  const shouldLabelEdges = shouldShowGraphEdgeLabels(displayGraph);
 
+  graphOrbitGuides.innerHTML = renderGraphOrbitGuides(displayGraph);
   graphEdges.innerHTML = displayGraph.edges
-    .map((edge) => renderGraphEdge(edge, nodesById, displayGraph.mode === "focus"))
+    .map((edge, edgeIndex) => renderGraphEdge(edge, nodesById, shouldLabelEdges, edgeIndex, edgeBundleMeta))
     .join("");
 
   graphNodes.innerHTML = displayGraph.nodes
@@ -2819,6 +2901,9 @@ function resetGraphView() {
 function releasePinnedNodes() {
   Object.values(graphLayout).forEach((layout) => {
     layout.pinned = false;
+    layout.anchorStrength = 0;
+    layout.anchorX = null;
+    layout.anchorY = null;
   });
   persistGraphPreferences();
   renderGraphMap(currentDisplayGraph, store.activeNodeId);
@@ -2911,6 +2996,7 @@ function autoArrangeGraph() {
     [...selectedGraphNodeIds].filter((nodeId) => currentDisplayGraph.nodes.some((node) => node.id === nodeId))
   );
   renderGraphMap(currentDisplayGraph, store.activeNodeId);
+  startGraphPhysicsAnimation(18);
   recenterGraphView();
 }
 
@@ -2941,10 +3027,22 @@ function handleNodePointerDown(event) {
     return;
   }
 
+  cancelPendingGraphSelection();
+  stopGraphPhysicsAnimation();
+  const point = clientToGraphPoint(event.clientX, event.clientY);
   dragState = {
     nodeId,
     startX: event.clientX,
     startY: event.clientY,
+    originX: position.x,
+    originY: position.y,
+    grabOffsetX: point.x - position.x,
+    grabOffsetY: point.y - position.y,
+    lastClientX: event.clientX,
+    lastClientY: event.clientY,
+    velocityX: 0,
+    velocityY: 0,
+    lastMoveAt: performance.now(),
     moved: false,
   };
   if (typeof event.currentTarget.setPointerCapture === "function") {
@@ -2958,6 +3056,8 @@ function handleNodePointerDown(event) {
   if (!selectedGraphNodeIds.has(nodeId)) {
     selectedGraphNodeIds = new Set([nodeId]);
   }
+  position.vx = 0;
+  position.vy = 0;
   event.stopPropagation();
 }
 
@@ -2967,15 +3067,25 @@ function handlePointerMove(event) {
       Math.abs(event.clientX - dragState.startX) > 4 ||
       Math.abs(event.clientY - dragState.startY) > 4;
     const point = clientToGraphPoint(event.clientX, event.clientY);
-    graphLayout[dragState.nodeId].x = point.x;
-    graphLayout[dragState.nodeId].y = point.y;
-    graphLayout[dragState.nodeId].vx = 0;
-    graphLayout[dragState.nodeId].vy = 0;
+    const layout = graphLayout[dragState.nodeId];
+    const now = performance.now();
+    const elapsed = Math.max(now - (dragState.lastMoveAt || now), 16);
+    const nextX = clamp(point.x - dragState.grabOffsetX, 60, GRAPH_SCENE_WIDTH - 60);
+    const nextY = clamp(point.y - dragState.grabOffsetY, 60, GRAPH_SCENE_HEIGHT - 60);
+    dragState.velocityX = ((nextX - layout.x) / elapsed) * 16;
+    dragState.velocityY = ((nextY - layout.y) / elapsed) * 16;
+    layout.x = nextX;
+    layout.y = nextY;
+    layout.vx = dragState.velocityX;
+    layout.vy = dragState.velocityY;
+    dragState.lastClientX = event.clientX;
+    dragState.lastClientY = event.clientY;
+    dragState.lastMoveAt = now;
     dragState.moved = dragState.moved || movedEnough;
     if (dragState.moved) {
-      graphLayout[dragState.nodeId].pinned = true;
+      layout.dragging = true;
     }
-    renderGraphMap(currentDisplayGraph, store.activeNodeId, { skipSimulation: true });
+    scheduleGraphMapRender({ skipSimulation: true });
     return;
   }
 
@@ -3042,6 +3152,15 @@ function buildNeighborhood(nodes, focusNode, depth = 1) {
         queue.push({ id: neighborId, depth: current.depth + 1 });
       }
     });
+  }
+
+  const focusNeighbors = adjacency.get(focusNode.id) || new Set();
+  const hasUsefulNeighbor = [...focusNeighbors].some((neighborId) => neighborId !== focusNode.parentId);
+  if (!hasUsefulNeighbor && focusNode.parentId && adjacency.has(focusNode.parentId)) {
+    [...adjacency.get(focusNode.parentId)]
+      .filter((neighborId) => neighborId !== focusNode.id)
+      .slice(0, 12)
+      .forEach((neighborId) => visited.add(neighborId));
   }
 
   nodes
@@ -3114,6 +3233,9 @@ function runGraphSimulation(displayGraph) {
         y: target.y + seededOffset(`${displayGraph.mode}:${node.id}:y`, 80),
         vx: 0,
         vy: 0,
+        anchorX: existing?.anchorX ?? null,
+        anchorY: existing?.anchorY ?? null,
+        anchorStrength: existing?.anchorStrength ?? 0,
         pinned: existing?.pinned || false,
         mode: layoutMode,
       };
@@ -3126,9 +3248,19 @@ function runGraphSimulation(displayGraph) {
   for (let iteration = 0; iteration < iterations; iteration += 1) {
     visibleNodes.forEach((node) => {
       const layout = graphLayout[node.id];
-      const target = targets[node.id] || { x: GRAPH_SCENE_WIDTH / 2, y: GRAPH_SCENE_HEIGHT / 2 };
+      const baseTarget = targets[node.id] || { x: GRAPH_SCENE_WIDTH / 2, y: GRAPH_SCENE_HEIGHT / 2 };
+      const anchorStrength = clamp(Number(layout.anchorStrength) || 0, 0, 0.92);
+      const target = anchorStrength
+        ? {
+            x: baseTarget.x * (1 - anchorStrength) + (layout.anchorX ?? baseTarget.x) * anchorStrength,
+            y: baseTarget.y * (1 - anchorStrength) + (layout.anchorY ?? baseTarget.y) * anchorStrength,
+          }
+        : baseTarget;
       layout.fx = (target.x - layout.x) * attraction;
       layout.fy = (target.y - layout.y) * attraction;
+      if (layout.anchorStrength) {
+        layout.anchorStrength = Math.max(0, layout.anchorStrength - 0.0022);
+      }
     });
 
     springEdges.forEach((edge) => {
@@ -3182,6 +3314,11 @@ function runGraphSimulation(displayGraph) {
         layout.vy = 0;
         return;
       }
+      if (layout.dragging) {
+        layout.vx = 0;
+        layout.vy = 0;
+        return;
+      }
 
       layout.vx = clamp((layout.vx + layout.fx) * damping, -maxVelocity, maxVelocity);
       layout.vy = clamp((layout.vy + layout.fy) * damping, -maxVelocity, maxVelocity);
@@ -3191,6 +3328,101 @@ function runGraphSimulation(displayGraph) {
 
     applyGraphCollisionPass(visibleNodes, displayGraph.mode);
   }
+}
+
+function runGraphPhysicsTick(displayGraph) {
+  if (!displayGraph?.nodes?.length) {
+    return;
+  }
+  const targets = buildGraphTargets(displayGraph);
+  const visibleNodes = displayGraph.nodes;
+  const springEdges = displayGraph.edges || [];
+  const attraction = displayGraph.mode === "global" ? 0.006 : 0.009;
+  const damping = 0.88;
+  const maxVelocity = 9;
+
+  visibleNodes.forEach((node) => {
+    const layout = graphLayout[node.id];
+    if (!layout) {
+      return;
+    }
+    const baseTarget = targets[node.id] || { x: GRAPH_SCENE_WIDTH / 2, y: GRAPH_SCENE_HEIGHT / 2 };
+    const anchorStrength = clamp(Number(layout.anchorStrength) || 0, 0, 0.92);
+    const target = anchorStrength
+      ? {
+          x: baseTarget.x * (1 - anchorStrength) + (layout.anchorX ?? baseTarget.x) * anchorStrength,
+          y: baseTarget.y * (1 - anchorStrength) + (layout.anchorY ?? baseTarget.y) * anchorStrength,
+        }
+      : baseTarget;
+    layout.fx = (target.x - layout.x) * attraction;
+    layout.fy = (target.y - layout.y) * attraction;
+    if (layout.anchorStrength) {
+      layout.anchorStrength = Math.max(0, layout.anchorStrength - 0.018);
+    }
+  });
+
+  springEdges.forEach((edge) => {
+    const source = graphLayout[edge.source];
+    const target = graphLayout[edge.target];
+    if (!source || !target) {
+      return;
+    }
+    const dx = target.x - source.x;
+    const dy = target.y - source.y;
+    const distance = Math.max(Math.hypot(dx, dy), 1);
+    const desired =
+      edge.type === "related" ? 162 :
+      edge.type === "parent" ? 112 :
+      edge.type === "file" ? 132 :
+      104;
+    const force = (distance - desired) * 0.0038;
+    const fx = (dx / distance) * force;
+    const fy = (dy / distance) * force;
+    source.fx += fx;
+    source.fy += fy;
+    target.fx -= fx;
+    target.fy -= fy;
+  });
+
+  forEachVisibleRepulsionPair(visibleNodes, displayGraph.mode, (leftNode, rightNode) => {
+    const leftLayout = graphLayout[leftNode.id];
+    const rightLayout = graphLayout[rightNode.id];
+    if (!leftLayout || !rightLayout) {
+      return;
+    }
+    const dx = rightLayout.x - leftLayout.x;
+    const dy = rightLayout.y - leftLayout.y;
+    const distance = Math.max(Math.hypot(dx, dy), 1);
+    const minimum = getGraphCollisionMinimum(leftNode, rightNode, displayGraph.mode);
+    if (distance > minimum * 1.55) {
+      return;
+    }
+    const overlap = Math.max(minimum - distance, 0);
+    const force = overlap * 0.052 + (displayGraph.mode === "global" ? 620 : 840) / (distance * distance);
+    const fx = (dx / distance) * force;
+    const fy = (dy / distance) * force;
+    leftLayout.fx -= fx;
+    leftLayout.fy -= fy;
+    rightLayout.fx += fx;
+    rightLayout.fy += fy;
+  });
+
+  visibleNodes.forEach((node) => {
+    const layout = graphLayout[node.id];
+    if (!layout || layout.dragging || layout.pinned) {
+      if (layout) {
+        layout.vx = 0;
+        layout.vy = 0;
+      }
+      return;
+    }
+    layout.vx = clamp((layout.vx + layout.fx) * damping, -maxVelocity, maxVelocity);
+    layout.vy = clamp((layout.vy + layout.fy) * damping, -maxVelocity, maxVelocity);
+    layout.x = clamp(layout.x + layout.vx, 60, GRAPH_SCENE_WIDTH - 60);
+    layout.y = clamp(layout.y + layout.vy, 60, GRAPH_SCENE_HEIGHT - 60);
+  });
+
+  applyGraphCollisionPass(visibleNodes, displayGraph.mode);
 }
 
 function buildGraphTargets(displayGraph) {
@@ -3779,7 +4011,118 @@ function assignArcTargets(targets, nodes, centerX, centerY, radiusX, radiusY, st
   });
 }
 
-function renderGraphEdge(edge, nodesById, showLabel) {
+function renderGraphOrbitGuides(displayGraph) {
+  if (graphUiState.layoutMode !== "balanced" || !displayGraph?.nodes?.length) {
+    return "";
+  }
+  const rings = buildGraphOrbitGuideRings(displayGraph);
+  if (!rings.length) {
+    return "";
+  }
+  return rings.map((ring, index) => `
+    <g class="graph-orbit-guide graph-orbit-guide--${ring.kind || "shell"}" style="--orbit-index:${index};">
+      <ellipse
+        cx="${ring.cx}"
+        cy="${ring.cy}"
+        rx="${ring.rx}"
+        ry="${ring.ry}"
+      ></ellipse>
+      <text x="${ring.cx + ring.rx + 12}" y="${ring.cy - 6}">${escapeHtml(ring.label)}</text>
+    </g>
+  `).join("");
+}
+
+function buildGraphOrbitGuideRings(displayGraph) {
+  const centerX = GRAPH_SCENE_WIDTH / 2;
+  const centerY = GRAPH_SCENE_HEIGHT / 2;
+  if (displayGraph.mode === "focus") {
+    const counts = displayGraph.nodes.reduce((accumulator, node) => {
+      const role = node.graphRole || "related";
+      accumulator[role] = (accumulator[role] || 0) + 1;
+      return accumulator;
+    }, {});
+    return [
+      { label: `nucleus ${formatOrbitCount((counts.focus || 0) + (counts.parent || 0) + (counts.child || 0))}`, rx: 140, ry: 108, kind: "nucleus" },
+      { label: `files ${formatOrbitCount(counts.file || 0)}`, rx: 250, ry: 194, kind: "file" },
+      { label: `signals ${formatOrbitCount((counts.error || 0) + (counts.edit || 0))}`, rx: 360, ry: 278, kind: "signal" },
+      { label: `related ${formatOrbitCount(counts.related || 0)}`, rx: 472, ry: 364, kind: "related" },
+    ]
+      .filter((ring) => !ring.label.endsWith(" 0"))
+      .map((ring) => ({ ...ring, cx: centerX, cy: centerY }));
+  }
+
+  const shellCounts = new Map();
+  displayGraph.nodes.forEach((node) => {
+    if (node.type === "project" || node.type === "workspace") {
+      return;
+    }
+    const shellIndex = getGlobalOrbitalShellIndex(node);
+    shellCounts.set(shellIndex, (shellCounts.get(shellIndex) || 0) + 1);
+  });
+  return [...shellCounts.entries()]
+    .sort((left, right) => left[0] - right[0])
+    .map(([shellIndex, count]) => ({
+      cx: centerX,
+      cy: centerY,
+      rx: 138 + shellIndex * 112,
+      ry: 108 + shellIndex * 88,
+      label: `shell ${shellIndex} ${formatOrbitCount(count)}`,
+      kind: `shell-${shellIndex}`,
+    }));
+}
+
+function formatOrbitCount(count) {
+  return count ? String(count) : "0";
+}
+
+function buildGraphEdgeBundleMeta(edges = []) {
+  const byHub = new Map();
+  edges.forEach((edge) => {
+    const hub = getGraphEdgeBundleHub(edge);
+    if (!byHub.has(hub)) {
+      byHub.set(hub, []);
+    }
+    byHub.get(hub).push(edge);
+  });
+  const meta = new Map();
+  byHub.forEach((items, hub) => {
+    const ordered = [...items].sort((left, right) =>
+      `${left.source}:${left.target}:${left.type}`.localeCompare(`${right.source}:${right.target}:${right.type}`)
+    );
+    const count = ordered.length;
+    ordered.forEach((edge, index) => {
+      meta.set(edge, {
+        hub,
+        count,
+        index,
+        offset: index - (count - 1) / 2,
+      });
+    });
+  });
+  return meta;
+}
+
+function getGraphEdgeBundleHub(edge) {
+  if (edge.type === "parent") {
+    return edge.source;
+  }
+  if (edge.type === "file" || edge.type === "error" || edge.type === "edit") {
+    return edge.source;
+  }
+  return [edge.source, edge.target].sort()[0];
+}
+
+function shouldShowGraphEdgeLabels(displayGraph) {
+  if (!displayGraph || graphUiState.labelMode === "selected") {
+    return false;
+  }
+  if (displayGraph.mode !== "focus") {
+    return false;
+  }
+  return (displayGraph.edges || []).length <= 34;
+}
+
+function renderGraphEdge(edge, nodesById, showLabel, edgeIndex = 0, bundleMeta = new Map()) {
   const sourceNode = nodesById.get(edge.source);
   const targetNode = nodesById.get(edge.target);
   const sourcePosition = graphLayout[edge.source];
@@ -3798,18 +4141,38 @@ function renderGraphEdge(edge, nodesById, showLabel) {
   const dx = endX - startX;
   const dy = endY - startY;
   const distance = Math.max(Math.sqrt(dx * dx + dy * dy), 1);
-  const curve = edge.type === "related" ? 30 : edge.type === "parent" ? 14 : 22;
-  const controlX = midX - (dy / distance) * curve;
-  const controlY = midY + (dx / distance) * curve;
+  const bundle = bundleMeta.get(edge) || { count: 1, offset: 0 };
+  const bundleStrength = Math.min(bundle.count - 1, 8);
+  const curve =
+    (edge.type === "related" ? 34 : edge.type === "parent" ? 16 : edge.type === "cluster" ? 42 : 24)
+    + bundle.offset * 9
+    + bundleStrength * 2;
+  const centerPull = shouldBundleGraphEdge(edge, bundle)
+    ? clamp(distance / 640, 0.08, 0.28)
+    : 0;
+  const sceneCenterX = GRAPH_SCENE_WIDTH / 2;
+  const sceneCenterY = GRAPH_SCENE_HEIGHT / 2;
+  const controlX = (midX - (dy / distance) * curve) * (1 - centerPull) + sceneCenterX * centerPull;
+  const controlY = (midY + (dx / distance) * curve) * (1 - centerPull) + sceneCenterY * centerPull;
   const labelX = (midX + controlX) / 2;
   const labelY = (midY + controlY) / 2 - 8;
+  const bundledClass = shouldBundleGraphEdge(edge, bundle) ? " is-bundled" : "";
+  const fadedClass = shouldFadeGraphEdgeLabel(edge, bundle, showLabel) ? " is-label-hidden" : "";
 
   return `
-    <g class="graph-edge-group graph-edge-group--${edge.type}">
+    <g class="graph-edge-group graph-edge-group--${edge.type}${bundledClass}">
       <path class="graph-edge graph-edge--${edge.type}" d="M ${startX} ${startY} Q ${controlX} ${controlY} ${endX} ${endY}"></path>
-      ${showLabel ? `<text class="graph-edge-label graph-edge-label--${edge.type}" x="${labelX}" y="${labelY}">${edge.type}</text>` : ""}
+      ${showLabel && !fadedClass ? `<text class="graph-edge-label graph-edge-label--${edge.type}" x="${labelX}" y="${labelY}">${edge.type}</text>` : ""}
     </g>
   `;
+}
+
+function shouldBundleGraphEdge(edge, bundle) {
+  return bundle.count >= 4 || edge.type === "related" || edge.type === "cluster";
+}
+
+function shouldFadeGraphEdgeLabel(edge, bundle, showLabel) {
+  return !showLabel || bundle.count > 5 || edge.type === "related" || edge.type === "cluster";
 }
 
 function clientToGraphPoint(clientX, clientY) {
@@ -4192,10 +4555,24 @@ function getNodeGlyph(node) {
 
 function handlePointerUp() {
   if (dragState) {
+    const layout = graphLayout[dragState.nodeId];
     if (dragState.moved) {
+      if (layout) {
+        layout.dragging = false;
+        layout.anchorX = layout.x;
+        layout.anchorY = layout.y;
+        layout.anchorStrength = graphInteractionMode === "pin" ? 0.92 : 0.72;
+        layout.vx = clamp(dragState.velocityX || 0, -12, 12);
+        layout.vy = clamp(dragState.velocityY || 0, -12, 12);
+        if (graphInteractionMode === "pin") {
+          layout.pinned = true;
+        }
+      }
       persistGraphPreferences();
-      renderGraphMap(currentDisplayGraph, store.activeNodeId);
-      bindNodeSelection();
+      scheduleGraphMapRender();
+      startGraphPhysicsAnimation(26);
+    } else if (layout) {
+      layout.dragging = false;
     }
     window.setTimeout(() => {
       dragState = null;

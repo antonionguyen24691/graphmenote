@@ -453,3 +453,53 @@ Payload nay duoc thiet ke de agent:
 MCP tool:
 
 - `low_token_context`
+
+## 16. Brain context + skill import tu Git
+
+Dung `brain-context` khi muon Graph Memory hoat dong nhu mot "bo nao" cho IDE/CLI:
+
+```bash
+node graph-cli.js brain-context --workspacePath "C:\repo\stock" --query ocr
+```
+
+Payload nay gom:
+
+- implementation thread dang can resume
+- brain skills phu hop
+- reusable module candidates
+- verification/adoption memory
+- recommended files de tranh doc full repo
+
+### Cai hoac update skill tu Git
+
+```bash
+node graph-cli.js brain-skill-update https://github.com/org/repo.git --subdir skills/ocr --ref main --name "OCR Skill"
+```
+
+Lenh nay se:
+
+1. clone hoac pull repo vao `KnowledgeVault\skills\_git`
+2. doc `skill.json`, `SKILL.md`, `README.md`, `package.json`
+3. index capability/tag/usage vao SQLite
+4. tao node `skill` trong graph de retrieval dung duoc
+5. dua skill vao `brain-context`
+
+### Dang ky skill local
+
+```bash
+node graph-cli.js brain-skill-register "C:\skills\my-skill" --name "My Skill"
+```
+
+### Tra cuu skill
+
+```bash
+node graph-cli.js brain-skills --query testing
+node graph-cli.js brain-skill skill-abc123
+```
+
+MCP tools tuong ung:
+
+- `brain_context`
+- `list_brain_skills`
+- `register_local_brain_skill`
+- `update_brain_skill_from_git`
