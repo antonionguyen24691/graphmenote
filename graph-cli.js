@@ -86,9 +86,13 @@ async function main() {
       const rootPath = args[0];
       const maxDepth = args[1] || 3;
       ensure(rootPath, "Can truyen rootPath.");
-      print(await client.crawlProjects(rootPath, maxDepth));
+      print(await client.crawlProjects(rootPath, maxDepth, parseFlags(args.slice(2))));
       return;
     }
+
+    case "workflow-prepare":
+      print(await client.prepareWorkflowExecution(parseFlags(args)));
+      return;
 
     case "modules":
       print(await client.findReusableModules(parseFlags(args)));
@@ -121,6 +125,80 @@ async function main() {
       print(await client.updateBrainSkillFromGit({ sourceUrl, ...parseFlags(args.slice(1)) }));
       return;
     }
+
+    case "ai-providers":
+      print(await client.listAiProviders(parseFlags(args)));
+      return;
+
+    case "ai-provider": {
+      print(await client.getAiProvider(args[0] || parseFlags(args).providerId));
+      return;
+    }
+
+    case "ai-provider-add": {
+      const kind = args[0];
+      const baseUrl = args[1];
+      ensure(kind, "Can truyen provider kind, vi du ollama, vllm, llamacpp, harness.");
+      ensure(baseUrl, "Can truyen baseUrl OpenAI-compatible.");
+      print(await client.registerAiProvider(normalizeAiFlags({ kind, baseUrl, ...parseFlags(args.slice(2)) })));
+      return;
+    }
+
+    case "ai-healthcheck":
+      print(await client.healthcheckAiProvider(normalizeAiFlags(parseFlags(args))));
+      return;
+
+    case "ai-chat":
+      print(await client.chatWithAiProvider(normalizeAiFlags(parseFlags(args))));
+      return;
+
+    case "ai-harness-run":
+      print(await client.runAiHarness(normalizeAiFlags(parseFlags(args))));
+      return;
+
+    case "ai-model-runs":
+      print(await client.listAiModelRuns(parseFlags(args)));
+      return;
+
+    case "ai-doctor":
+      print(await client.runAiSetupDoctor(parseFlags(args)));
+      return;
+
+    case "ai-pick":
+      print(await client.pickAiRuntime(parseFlags(args)));
+      return;
+
+    case "ai-profiles":
+      print(await client.listAiRuntimeProfiles(parseFlags(args)));
+      return;
+
+    case "ai-profile": {
+      print(await client.getAiRuntimeProfile(args[0] || parseFlags(args).profileId));
+      return;
+    }
+
+    case "ai-profile-upsert":
+      print(await client.upsertAiRuntimeProfile(normalizeAiFlags(parseFlags(args))));
+      return;
+
+    case "ai-chat-threads":
+      print(await client.listAiChatThreads(parseFlags(args)));
+      return;
+
+    case "ai-chat-thread": {
+      const threadId = args[0] || parseFlags(args).threadId;
+      ensure(threadId, "Can truyen threadId.");
+      print(await client.getAiChatThread(threadId, parseFlags(args.slice(1))));
+      return;
+    }
+
+    case "ai-chat-start":
+      print(await client.startAiChatThread(normalizeAiFlags(parseFlags(args))));
+      return;
+
+    case "ai-chat-send":
+      print(await client.sendAiChatMessage(normalizeAiFlags(parseFlags(args))));
+      return;
 
     case "project-match":
       print(await client.matchProjectToReusableModules({
@@ -401,6 +479,27 @@ function normalizeImplementationFlags(flags) {
   return payload;
 }
 
+function normalizeAiFlags(flags) {
+  const payload = { ...flags };
+
+  ["capabilities"].forEach((key) => {
+    if (payload[key]) {
+      payload[key] = String(payload[key])
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+    }
+  });
+
+  ["temperature"].forEach((key) => {
+    if (payload[key] !== undefined) {
+      payload[key] = Number(payload[key]);
+    }
+  });
+
+  return payload;
+}
+
 function normalizeAdoptionApplyFlags(flags) {
   const payload = { ...flags };
 
@@ -436,11 +535,42 @@ function ensure(value, message) {
 
 async function runTrackedCommand(workspacePath, toolSource, commandParts) {
   const commandText = commandParts.join(" ");
+  const workflowPurpose = inferWorkflowPurposeFromCommand(commandText);
+  let workflow = null;
+  try {
+    workflow = await client.prepareWorkflowExecution({
+      workspacePath,
+      purpose: workflowPurpose,
+      query: commandText,
+      toolSource,
+      checkHealth: false,
+    });
+    console.error(`[graph-memory] workflow prepared: ${workflow.handoff?.summary || workflow.status}`);
+  } catch (error) {
+    console.error(`[graph-memory] workflow prepare failed: ${error.message}`);
+  }
   const run = await client.startActivity({
     workspacePath,
     toolSource,
     commandText,
-    summary: `Running ${commandText}`,
+    summary: workflow?.handoff?.summary || `Running ${commandText}`,
+    metadata: workflow
+      ? {
+          workflow: {
+            purpose: workflow.purpose,
+            status: workflow.status,
+            runtime: workflow.runtime?.selected
+              ? {
+                  providerId: workflow.runtime.selected.providerId,
+                  profileId: workflow.runtime.selected.profileId,
+                  model: workflow.runtime.selected.model,
+                }
+              : null,
+            recommendedFiles: (workflow.memory?.recommendedFiles || []).slice(0, 3),
+            startWith: workflow.handoff?.startWith || null,
+          },
+        }
+      : {},
   });
 
   console.error(`[graph-memory] activity ${run.id} started for ${workspacePath}`);
@@ -448,7 +578,7 @@ async function runTrackedCommand(workspacePath, toolSource, commandParts) {
   const heartbeatTimer = setInterval(() => {
     client
       .heartbeatActivity(run.id, {
-        summary: `Running ${commandText}`,
+        summary: workflow?.handoff?.summary || `Running ${commandText}`,
         commandText,
       })
       .catch(() => {});
@@ -524,6 +654,20 @@ function print(payload) {
   console.log(JSON.stringify(payload, null, 2));
 }
 
+function inferWorkflowPurposeFromCommand(commandText) {
+  const normalized = String(commandText || "").toLowerCase();
+  if (normalized.includes("deploy") || normalized.includes("vercel") || normalized.includes("release")) {
+    return "deploy";
+  }
+  if (normalized.includes("crawl") || normalized.includes("scrape") || normalized.includes("scan")) {
+    return "crawl";
+  }
+  if (normalized.includes("review") || normalized.includes("lint") || normalized.includes("test")) {
+    return "review";
+  }
+  return "coding";
+}
+
 function printHelp() {
   console.log(`Graph Memory CLI
 
@@ -541,11 +685,27 @@ Usage:
   node graph-cli.js run "C:\\repo" codex npm run dev
   node graph-cli.js open-folder exports
   node graph-cli.js crawl-projects "C:\\Users\\DELL\\OneDrive\\Desktop\\sang kein" 3
+  node graph-cli.js workflow-prepare --workspacePath "C:\\repo\\stock" --purpose deploy --query "prepare deploy workflow"
   node graph-cli.js brain-context --workspacePath "C:\\repo\\stock" --query ocr
   node graph-cli.js brain-skills --query testing
   node graph-cli.js brain-skill skill-testing-abc123
   node graph-cli.js brain-skill-register "C:\\skills\\my-skill" --name My Skill
   node graph-cli.js brain-skill-update https://github.com/org/repo.git --subdir skills/ocr --ref main --name OCR Skill
+  node graph-cli.js ai-providers
+  node graph-cli.js ai-provider-add ollama http://localhost:11434/v1 --model qwen2.5-coder --capabilities chat,json,harness
+  node graph-cli.js ai-healthcheck --provider provider-ollama-local
+  node graph-cli.js ai-chat --provider provider-ollama-local --model qwen2.5-coder --workspacePath "C:\\repo\\stock" --query "Tom tat viec can lam tiep"
+  node graph-cli.js ai-harness-run --provider provider-ollama-local --suite harness
+  node graph-cli.js ai-harness-run --provider provider-ollama-local --mode external --tasks gsm8k --limit 5 --applyChatTemplate true
+  node graph-cli.js ai-harness-run --provider provider-ollama-local --importPath "C:\\evals\\gsm8k\\results.json" --moduleId module-ocr --workspacePath "C:\\repo\\new-app"
+  node graph-cli.js ai-model-runs --limit 10
+  node graph-cli.js ai-doctor --timeoutMs 1200
+  node graph-cli.js ai-pick --purpose coding --checkHealth false
+  node graph-cli.js ai-profiles
+  node graph-cli.js ai-profile-upsert --id profile-local-crawl --name "Local Crawl" --purpose crawl --provider provider-ollama-local --model qwen2.5-coder --contextPolicy low-token
+  node graph-cli.js ai-chat-start --workspacePath "C:\\repo\\stock" --title "Noi bo OCR rollout" --profile profile-local-coding
+  node graph-cli.js ai-chat-send --threadId ai-chat-abc --message "Dang dung o dau?"
+  node graph-cli.js ai-chat-threads --workspacePath "C:\\repo\\stock"
   node graph-cli.js modules --capability ocr --workspacePath "C:\\repo\\new-app"
   node graph-cli.js project-match "C:\\repo\\new-app" --query ocr
   node graph-cli.js module-adoptions --workspacePath "C:\\repo\\new-app"

@@ -846,6 +846,259 @@ server.tool(
 );
 
 server.tool(
+  "list_ai_providers",
+  "List local or OpenAI-compatible AI providers available to Graph Memory, including Ollama, vLLM, llama.cpp, LM Studio, and harness adapters.",
+  {
+    kind: z.string().optional().describe("Optional provider kind filter"),
+    status: z.string().optional().describe("Optional status filter"),
+    limit: z.number().optional().describe("Maximum providers to return"),
+  },
+  async ({ kind, status, limit }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(db.listAiProviders({ kind, status, limit }), null, 2),
+      },
+    ],
+  })
+);
+
+server.tool(
+  "register_ai_provider",
+  "Register an OpenAI-compatible provider so future IDE/CLI agents can use local models or model harness adapters through Graph Memory.",
+  {
+    kind: z.string().describe("Provider kind such as ollama, vllm, llamacpp, lmstudio, harness, or openai_compatible"),
+    baseUrl: z.string().describe("OpenAI-compatible base URL, for example http://localhost:11434/v1"),
+    name: z.string().optional().describe("Optional display name"),
+    model: z.string().optional().describe("Optional default model"),
+    apiKeyRef: z.string().optional().describe("Optional env var name or env:NAME reference"),
+    capabilities: z.array(z.string()).optional().describe("Optional capability tags"),
+    privacyLevel: z.enum(["local", "lan", "cloud"]).optional().describe("Provider privacy boundary"),
+  },
+  async ({ kind, baseUrl, name, model, apiKeyRef, capabilities, privacyLevel }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(
+          db.registerAiProvider({ kind, baseUrl, name, model, apiKeyRef, capabilities, privacyLevel }),
+          null,
+          2
+        ),
+      },
+    ],
+  })
+);
+
+server.tool(
+  "healthcheck_ai_provider",
+  "Check a provider /models endpoint and store the result as model verification memory.",
+  {
+    provider: z.string().optional().describe("Provider id, name, or kind"),
+    timeoutMs: z.number().optional().describe("Request timeout in milliseconds"),
+  },
+  async ({ provider, timeoutMs }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(await db.healthcheckAiProvider(provider, { timeoutMs }), null, 2),
+      },
+    ],
+  })
+);
+
+server.tool(
+  "chat_with_ai_provider",
+  "Send a compact Graph Memory context pack plus user query to a local/OpenAI-compatible model and store the model run.",
+  {
+    provider: z.string().optional().describe("Provider id, name, or kind"),
+    model: z.string().optional().describe("Model override"),
+    workspacePath: z.string().optional().describe("Workspace root for compact memory context"),
+    query: z.string().describe("User query or instruction"),
+    nodeId: z.string().optional().describe("Optional graph node id to store chat history"),
+    temperature: z.number().optional().describe("Sampling temperature"),
+    maxTokens: z.number().optional().describe("Maximum completion tokens"),
+    timeoutMs: z.number().optional().describe("Request timeout in milliseconds"),
+  },
+  async ({ provider, model, workspacePath, query, nodeId, temperature, maxTokens, timeoutMs }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(
+          await db.chatWithAiProvider({ provider, model, workspacePath, query, nodeId, temperature, maxTokens, timeoutMs }),
+          null,
+          2
+        ),
+      },
+    ],
+  })
+);
+
+server.tool(
+  "run_ai_harness",
+  "Run Graph Memory built-in model harness checks and save latency/output memory for future provider selection.",
+  {
+    provider: z.string().optional().describe("Provider id, name, or kind"),
+    model: z.string().optional().describe("Model override"),
+    suite: z.string().optional().describe("Suite: smoke, json, latency, or harness"),
+    prompt: z.string().optional().describe("Optional custom prompt"),
+    timeoutMs: z.number().optional().describe("Request timeout in milliseconds"),
+  },
+  async ({ provider, model, suite, prompt, timeoutMs }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(await db.runAiHarness({ provider, model, suite, prompt, timeoutMs }), null, 2),
+      },
+    ],
+  })
+);
+
+server.tool(
+  "list_ai_model_runs",
+  "List recent AI provider chat, healthcheck, and harness runs stored as verification memory.",
+  {
+    provider: z.string().optional().describe("Optional provider id"),
+    runType: z.string().optional().describe("Optional run type such as chat, healthcheck, or harness:smoke"),
+    limit: z.number().optional().describe("Maximum runs to return"),
+  },
+  async ({ provider, runType, limit }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(db.listAiModelRuns({ provider, runType, limit }), null, 2),
+      },
+    ],
+  })
+);
+
+server.tool(
+  "ai_setup_doctor",
+  "Probe local AI providers, model endpoints, runtime profiles, and local commands; returns concrete setup recommendations and remaining roadmap tasks.",
+  {
+    timeoutMs: z.number().optional().describe("Per-provider timeout in milliseconds"),
+    checkHealth: z.boolean().optional().describe("Set false to skip HTTP healthchecks"),
+  },
+  async ({ timeoutMs, checkHealth }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(await db.runAiSetupDoctor({ timeoutMs, checkHealth }), null, 2),
+      },
+    ],
+  })
+);
+
+server.tool(
+  "pick_ai_runtime",
+  "Select the best runtime profile/provider/model for a purpose using provider health, model availability, and profile metadata.",
+  {
+    purpose: z.string().optional().describe("Purpose such as coding, chat, crawl, deploy, review, or harness"),
+    timeoutMs: z.number().optional().describe("Healthcheck timeout when checkHealth is true"),
+    checkHealth: z.boolean().optional().describe("Set true to actively probe providers before ranking"),
+    limit: z.number().optional().describe("Maximum candidates to return"),
+  },
+  async ({ purpose, timeoutMs, checkHealth, limit }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(await db.pickAiRuntime({ purpose, timeoutMs, checkHealth, limit }), null, 2),
+      },
+    ],
+  })
+);
+
+server.tool(
+  "list_ai_runtime_profiles",
+  "List AI runtime profiles that map purposes like coding, chat, crawl, deploy, or harness to provider/model/context policy.",
+  {
+    purpose: z.string().optional().describe("Optional purpose filter"),
+    status: z.string().optional().describe("Optional status filter"),
+    limit: z.number().optional().describe("Maximum profiles to return"),
+  },
+  async ({ purpose, status, limit }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(db.listAiRuntimeProfiles({ purpose, status, limit }), null, 2),
+      },
+    ],
+  })
+);
+
+server.tool(
+  "upsert_ai_runtime_profile",
+  "Create or update a runtime profile so future IDE/CLI agents know which local model/provider to use for a purpose.",
+  {
+    id: z.string().optional().describe("Stable profile id"),
+    name: z.string().optional().describe("Profile display name"),
+    purpose: z.string().optional().describe("Purpose such as coding, chat, crawl, deploy, review, or harness"),
+    provider: z.string().optional().describe("Provider id, name, or kind"),
+    model: z.string().optional().describe("Model name"),
+    temperature: z.number().optional().describe("Sampling temperature"),
+    maxTokens: z.number().optional().describe("Max completion tokens"),
+    contextPolicy: z.string().optional().describe("Context policy: workspace-brain, low-token, full-thread, or none"),
+    status: z.string().optional().describe("Profile status"),
+  },
+  async ({ id, name, purpose, provider, model, temperature, maxTokens, contextPolicy, status }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(
+          db.upsertAiRuntimeProfile({ id, name, purpose, provider, model, temperature, maxTokens, contextPolicy, status }),
+          null,
+          2
+        ),
+      },
+    ],
+  })
+);
+
+server.tool(
+  "list_ai_chat_threads",
+  "List internal AI chat threads persisted per workspace so another IDE/CLI can resume the conversation.",
+  {
+    workspacePath: z.string().optional().describe("Optional workspace path"),
+    status: z.string().optional().describe("Optional thread status"),
+    limit: z.number().optional().describe("Maximum threads to return"),
+  },
+  async ({ workspacePath, status, limit }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(db.listAiChatThreads({ workspacePath, status, limit }), null, 2),
+      },
+    ],
+  })
+);
+
+server.tool(
+  "send_ai_chat_message",
+  "Send a message to an internal workspace AI chat thread, using the selected runtime profile and compact Graph Memory context.",
+  {
+    threadId: z.string().optional().describe("Existing thread id; omit to create a new thread"),
+    workspacePath: z.string().optional().describe("Workspace path when creating a new thread"),
+    title: z.string().optional().describe("Thread title when creating a new thread"),
+    profile: z.string().optional().describe("Profile id, name, or purpose"),
+    provider: z.string().optional().describe("Provider id, name, or kind override"),
+    model: z.string().optional().describe("Model override"),
+    message: z.string().describe("User message"),
+    timeoutMs: z.number().optional().describe("Request timeout"),
+  },
+  async ({ threadId, workspacePath, title, profile, provider, model, message, timeoutMs }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(
+          await db.sendAiChatMessage({ threadId, workspacePath, title, profile, provider, model, message, timeoutMs }),
+          null,
+          2
+        ),
+      },
+    ],
+  })
+);
+
+server.tool(
   "implementation_context",
   "Return resumable implementation threads, current step, next step, blockers, and recent checkpoints so another IDE or CLI can continue work with minimal tokens.",
   {
@@ -861,6 +1114,31 @@ server.tool(
         type: "text",
         text: JSON.stringify(
           db.getImplementationContext({ workspacePath, query, limit, recentLimit, eventLimit }),
+          null,
+          2
+        ),
+      },
+    ],
+  })
+);
+
+server.tool(
+  "prepare_workflow_execution",
+  "Prepare a low-token execution pack for crawl, deploy, review, or coding flows by combining runtime selection, compact memory, and resumable implementation context.",
+  {
+    workspacePath: z.string().describe("Workspace root to prepare"),
+    purpose: z.string().optional().describe("Purpose such as coding, crawl, deploy, review, or harness"),
+    query: z.string().optional().describe("Optional task or command text"),
+    capability: z.string().optional().describe("Optional capability hint"),
+    checkHealth: z.boolean().optional().describe("Set true to actively probe providers"),
+    timeoutMs: z.number().optional().describe("Runtime probe timeout"),
+  },
+  async ({ workspacePath, purpose, query, capability, checkHealth, timeoutMs }) => ({
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(
+          await db.prepareWorkflowExecution({ workspacePath, purpose, query, capability, checkHealth, timeoutMs }),
           null,
           2
         ),

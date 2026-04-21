@@ -11,7 +11,27 @@ let dashboardState = {
   loading: false,
   error: null,
 };
+let aiRuntimeState = {
+  workspacePath: null,
+  loadedAt: 0,
+  loading: false,
+  sending: false,
+  error: null,
+  pick: null,
+  threads: [],
+  lastReply: null,
+};
+let workflowPrepState = {
+  workspacePath: null,
+  purpose: "coding",
+  loadedAt: 0,
+  loading: false,
+  error: null,
+  data: null,
+};
 let lowTokenReloadTimer = null;
+let aiRuntimeReloadTimer = null;
+let workflowPrepReloadTimer = null;
 let graphSelectionLoadTimer = null;
 let graphSelectionAbortController = null;
 let graphSelectionRequestVersion = 0;
@@ -139,6 +159,16 @@ const recommendedFilesMeta = document.getElementById("recommendedFilesMeta");
 const recommendedFilesList = document.getElementById("recommendedFilesList");
 const recommendationsMeta = document.getElementById("recommendationsMeta");
 const recommendationsList = document.getElementById("recommendationsList");
+const workflowPrepMeta = document.getElementById("workflowPrepMeta");
+const workflowPrepControls = document.getElementById("workflowPrepControls");
+const workflowPrepPanel = document.getElementById("workflowPrepPanel");
+const workflowPrepStatus = document.getElementById("workflowPrepStatus");
+const aiRuntimeMeta = document.getElementById("aiRuntimeMeta");
+const aiRuntimePanel = document.getElementById("aiRuntimePanel");
+const aiChatForm = document.getElementById("aiChatForm");
+const aiChatPrompt = document.getElementById("aiChatPrompt");
+const aiChatSendButton = document.getElementById("aiChatSendButton");
+const aiChatStatus = document.getElementById("aiChatStatus");
 const brainModeTitle = document.getElementById("brainModeTitle");
 const brainModeSummary = document.getElementById("brainModeSummary");
 const brainBreadcrumbs = document.getElementById("brainBreadcrumbs");
@@ -150,6 +180,7 @@ const brainLegend = document.getElementById("brainLegend");
 searchInput.addEventListener("input", () => {
   render();
   scheduleLowTokenContextRefresh({ force: true, delayMs: 350 });
+  scheduleWorkflowPreparationRefresh({ force: true, delayMs: 420 });
 });
 noteForm.addEventListener("submit", handleNoteSubmit);
 exportButton.addEventListener("click", handleExport);
@@ -161,6 +192,29 @@ repairGraphButton.addEventListener("click", handleRepairGraph);
 importForm.addEventListener("submit", handleImport);
 crawlProjectsButton.addEventListener("click", seedDefaultCrawlRoot);
 crawlForm.addEventListener("submit", handleCrawlProjects);
+aiChatForm?.addEventListener("submit", handleAiChatSubmit);
+workflowPrepPanel?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-workflow-action]");
+  if (!button) {
+    return;
+  }
+  const action = button.getAttribute("data-workflow-action") || "";
+  void handleWorkflowPackAction(action);
+});
+Array.from(workflowPrepControls?.querySelectorAll("[data-workflow-purpose]") || []).forEach((button) => {
+  button.addEventListener("click", () => {
+    const purpose = button.getAttribute("data-workflow-purpose") || "coding";
+    if (purpose === workflowPrepState.purpose && workflowPrepState.data && !workflowPrepState.error) {
+      return;
+    }
+    workflowPrepState = {
+      ...workflowPrepState,
+      purpose,
+    };
+    renderWorkflowPreparation();
+    scheduleWorkflowPreparationRefresh({ force: true, purpose, delayMs: 80 });
+  });
+});
 graphZoomIn.addEventListener("click", () => zoomGraph(0.12));
 graphZoomOut.addEventListener("click", () => zoomGraph(-0.12));
 graphRecenter.addEventListener("click", recenterGraphView);
@@ -308,6 +362,8 @@ async function bootstrap() {
 
 async function hydrateDashboardContextAfterInitialRender() {
   scheduleLowTokenContextRefresh({ force: true, delayMs: 2500 });
+  scheduleWorkflowPreparationRefresh({ force: true, delayMs: 2650 });
+  scheduleAiRuntimeRefresh({ force: true, delayMs: 2800 });
   if (store.activeNodeId) {
     graphFocusNodeId = store.activeNodeId;
   }
@@ -514,6 +570,193 @@ function scheduleLowTokenContextRefresh(options = {}) {
   }, options.delayMs ?? 1000);
 }
 
+async function loadAiRuntimeContext(options = {}) {
+  const workspacePath = resolveDashboardWorkspacePath();
+  if (!workspacePath) {
+    aiRuntimeState = {
+      ...aiRuntimeState,
+      workspacePath: null,
+      loadedAt: 0,
+      loading: false,
+      error: "No workspace context available.",
+      pick: null,
+      threads: [],
+    };
+    return null;
+  }
+
+  const shouldReuseCache =
+    !options.force &&
+    aiRuntimeState.workspacePath === workspacePath &&
+    aiRuntimeState.pick &&
+    Date.now() - aiRuntimeState.loadedAt < 15000;
+
+  if (shouldReuseCache) {
+    return aiRuntimeState;
+  }
+
+  aiRuntimeState = {
+    ...aiRuntimeState,
+    workspacePath,
+    loading: true,
+    error: null,
+  };
+  renderAiRuntimePanel();
+
+  try {
+    const pickParams = new URLSearchParams({
+      purpose: "coding",
+      checkHealth: "false",
+      limit: "3",
+    });
+    const threadParams = new URLSearchParams({
+      workspacePath,
+      status: "active",
+      limit: "3",
+    });
+    const [pickResponse, threadsResponse] = await Promise.all([
+      fetch(`/api/ai/runtime-pick?${pickParams.toString()}`),
+      fetch(`/api/ai/chat-threads?${threadParams.toString()}`),
+    ]);
+
+    if (!pickResponse.ok) {
+      throw new Error(`Runtime picker failed: ${pickResponse.status}`);
+    }
+    if (!threadsResponse.ok) {
+      throw new Error(`Chat threads failed: ${threadsResponse.status}`);
+    }
+
+    const pick = await pickResponse.json();
+    const threadsPayload = await threadsResponse.json();
+    aiRuntimeState = {
+      ...aiRuntimeState,
+      workspacePath,
+      loadedAt: Date.now(),
+      loading: false,
+      error: null,
+      pick,
+      threads: Array.isArray(threadsPayload) ? threadsPayload : threadsPayload.threads || [],
+    };
+    return aiRuntimeState;
+  } catch (error) {
+    aiRuntimeState = {
+      ...aiRuntimeState,
+      workspacePath,
+      loadedAt: Date.now(),
+      loading: false,
+      error: error.message,
+      pick: null,
+      threads: [],
+    };
+    return null;
+  } finally {
+    renderAiRuntimePanel();
+  }
+}
+
+function scheduleAiRuntimeRefresh(options = {}) {
+  if (aiRuntimeReloadTimer) {
+    window.clearTimeout(aiRuntimeReloadTimer);
+  }
+  aiRuntimeReloadTimer = window.setTimeout(async () => {
+    aiRuntimeReloadTimer = null;
+    await loadAiRuntimeContext({ force: Boolean(options.force) });
+  }, options.delayMs ?? 1200);
+}
+
+async function loadWorkflowPreparation(options = {}) {
+  const workspacePath = options.workspacePath || resolveDashboardWorkspacePath();
+  const purpose = options.purpose || workflowPrepState.purpose || "coding";
+  if (!workspacePath) {
+    workflowPrepState = {
+      ...workflowPrepState,
+      workspacePath: null,
+      loadedAt: 0,
+      loading: false,
+      error: "No workspace context available.",
+      data: null,
+    };
+    return null;
+  }
+
+  const shouldReuseCache =
+    !options.force &&
+    workflowPrepState.workspacePath === workspacePath &&
+    workflowPrepState.purpose === purpose &&
+    workflowPrepState.data &&
+    Date.now() - workflowPrepState.loadedAt < 15000;
+
+  if (shouldReuseCache) {
+    return workflowPrepState.data;
+  }
+
+  workflowPrepState = {
+    ...workflowPrepState,
+    workspacePath,
+    purpose,
+    loading: true,
+    error: null,
+  };
+  renderWorkflowPreparation();
+
+  try {
+    const query = searchInput.value.trim();
+    const response = await fetch("/api/workflow/prepare", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        workspacePath,
+        purpose,
+        query,
+        checkHealth: false,
+      }),
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.message || payload.error || `Workflow prepare failed: ${response.status}`);
+    }
+    workflowPrepState = {
+      ...workflowPrepState,
+      workspacePath,
+      purpose,
+      loadedAt: Date.now(),
+      loading: false,
+      error: null,
+      data: payload,
+    };
+    return payload;
+  } catch (error) {
+    workflowPrepState = {
+      ...workflowPrepState,
+      workspacePath,
+      purpose,
+      loadedAt: Date.now(),
+      loading: false,
+      error: error.message,
+      data: null,
+    };
+    return null;
+  } finally {
+    renderWorkflowPreparation();
+  }
+}
+
+function scheduleWorkflowPreparationRefresh(options = {}) {
+  if (workflowPrepReloadTimer) {
+    window.clearTimeout(workflowPrepReloadTimer);
+  }
+  workflowPrepReloadTimer = window.setTimeout(async () => {
+    workflowPrepReloadTimer = null;
+    await loadWorkflowPreparation({
+      force: Boolean(options.force),
+      purpose: options.purpose || workflowPrepState.purpose,
+      workspacePath: options.workspacePath,
+    });
+  }, options.delayMs ?? 1300);
+}
+
 async function syncGraphState() {
   try {
     const [graphResponse, activityResponse] = await Promise.all([
@@ -607,8 +850,13 @@ function renderActivityItem(run) {
         ? "is-failed"
         : "";
   const title = run.projectName || compactPath(run.workspacePath);
-  const summary = run.summary || run.currentFile || run.commandText || run.workspacePath;
+  const workflow = run.metadata?.workflow || null;
+  const summary = workflow?.summary || run.summary || run.currentFile || run.commandText || run.workspacePath;
   const note = run.latestError || run.currentFile || title;
+  const workflowLabel = workflow?.purpose
+    ? `${workflow.purpose}${workflow.runtime ? ` · ${workflow.runtime}` : ""}`
+    : "";
+  const workflowHint = workflow?.startWith ? truncateText(workflow.startWith, 88) : "";
 
   return `
     <article class="activity-item ${statusClass}">
@@ -620,6 +868,8 @@ function renderActivityItem(run) {
         <span class="activity-badge ${statusClass}">${run.status}</span>
       </header>
       <p>${truncateText(summary, 140)}</p>
+      ${workflowLabel ? `<small class="activity-workflow-label">${escapeHtml(workflowLabel)}</small>` : ""}
+      ${workflowHint ? `<small class="activity-workflow-hint">${escapeHtml(workflowHint)}</small>` : ""}
       <span>${truncateText(note, 120)}</span>
     </article>
   `;
@@ -1146,6 +1396,14 @@ function pathBaseName(filePath) {
   return normalized.split("/").filter(Boolean).pop() || filePath || "";
 }
 
+function capitalizeWord(value) {
+  const text = String(value || "").trim();
+  if (!text) {
+    return "";
+  }
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 function formatRelativeTime(value) {
   if (!value) {
     return "-";
@@ -1279,6 +1537,8 @@ function renderCommandCenter() {
   renderVerificationMemory(context?.verificationMemories || []);
   renderRecommendedFiles(context?.debugContext || null);
   renderRecommendations(context?.recommendations || []);
+  renderWorkflowPreparation();
+  renderAiRuntimePanel();
 }
 
 function renderResumeTaskPanel(implementation) {
@@ -1419,6 +1679,398 @@ function renderRecommendations(recommendations) {
       <p>${escapeHtml(item)}</p>
     </article>
   `).join("");
+}
+
+function renderWorkflowPreparation() {
+  if (!workflowPrepPanel || !workflowPrepMeta || !workflowPrepStatus) {
+    return;
+  }
+
+  const workspacePath = workflowPrepState.workspacePath || resolveDashboardWorkspacePath();
+  const payload = workflowPrepState.data;
+  const runtime = payload?.runtime?.selected || null;
+  const memory = payload?.memory || null;
+  const implementation = payload?.implementation || null;
+  const purpose = workflowPrepState.purpose || payload?.purpose || "coding";
+
+  Array.from(workflowPrepControls?.querySelectorAll("[data-workflow-purpose]") || []).forEach((button) => {
+    button.classList.toggle("is-active", button.getAttribute("data-workflow-purpose") === purpose);
+  });
+
+  workflowPrepMeta.textContent = payload
+    ? `${payload.purpose || purpose} · ${(memory?.recommendedFiles || []).length} files · ${(memory?.projectMatches || []).length} modules`
+    : workflowPrepState.loading
+      ? "loading handoff"
+      : "low-token handoff";
+
+  workflowPrepStatus.textContent = workflowPrepState.loading
+    ? `Preparing ${purpose} handoff with compact memory...`
+    : workflowPrepState.error
+      ? workflowPrepState.error
+      : payload?.handoff?.summary || "Preparing the smallest useful handoff for this workspace.";
+
+  if (!workspacePath) {
+    workflowPrepPanel.innerHTML = `<p class="empty-state">Select a project workspace to prepare a workflow handoff.</p>`;
+    return;
+  }
+
+  if (workflowPrepState.loading && !payload) {
+    workflowPrepPanel.innerHTML = `<p class="empty-state">Loading workflow pack...</p>`;
+    return;
+  }
+
+  if (workflowPrepState.error) {
+    workflowPrepPanel.innerHTML = `
+      <article class="command-item command-item--workflow">
+        <div class="command-item-head">
+          <strong>Workflow unavailable</strong>
+          ${renderChip("error", "is-danger")}
+        </div>
+        <p>${escapeHtml(workflowPrepState.error)}</p>
+      </article>
+    `;
+    return;
+  }
+
+  if (!payload) {
+    workflowPrepPanel.innerHTML = `<p class="empty-state">Workflow preparation will appear here once workspace memory is ready.</p>`;
+    return;
+  }
+
+  const recommendations = (memory?.recommendations || []).slice(0, 3);
+  const files = (memory?.recommendedFiles || []).slice(0, 3);
+  const matches = (memory?.projectMatches || []).slice(0, 3);
+  const primaryFile = files[0]?.filePath || "";
+  workflowPrepPanel.innerHTML = `
+    <article class="command-item command-item--workflow">
+      <div class="command-item-head">
+        <strong>${escapeHtml(capitalizeWord(payload.purpose || purpose))} workflow</strong>
+        ${renderChip(payload.status || "pending", getAiRuntimeBadgeClass(payload.status))}
+      </div>
+      <div class="workflow-pack-summary">
+        ${renderKeyValueLine("Runtime", runtime?.profileName || runtime?.providerName || runtime?.providerId || "not picked")}
+        ${renderKeyValueLine("Model", runtime?.model || "default")}
+        ${renderKeyValueLine("Tokens", memory?.tokenEstimate ? `~${memory.tokenEstimate}` : "n/a")}
+        ${renderKeyValueLine("Project", memory?.project?.name || pathBaseName(payload.workspacePath) || "workspace")}
+      </div>
+      ${payload.handoff?.startWith ? `
+        <div class="workflow-handoff-box">
+          <span>Start with</span>
+          <strong>${escapeHtml(truncateText(payload.handoff.startWith, 180))}</strong>
+        </div>
+      ` : ""}
+      ${implementation ? `
+        <div class="command-meta-stack">
+          ${renderKeyValueLine("Current step", implementation.currentStep || implementation.title || "No step recorded")}
+          ${renderKeyValueLine("Next step", implementation.nextStep || implementation.currentStep || "Continue current thread")}
+          ${implementation.blocker ? renderKeyValueLine("Blocker", implementation.blocker) : ""}
+        </div>
+      ` : ""}
+      <div class="workflow-action-row">
+        <button type="button" class="workflow-action-button" data-workflow-action="copy-handoff">Copy handoff</button>
+        <button type="button" class="workflow-action-button" data-workflow-action="open-workspace">Open workspace</button>
+        <button
+          type="button"
+          class="workflow-action-button"
+          data-workflow-action="open-file"
+          ${primaryFile ? "" : "disabled"}
+          title="${escapeHtmlAttribute(primaryFile || "No recommended file available")}"
+        >
+          Open top file
+        </button>
+      </div>
+    </article>
+    ${files.length ? `
+      <article class="command-item">
+        <div class="command-item-head">
+          <strong>Open first</strong>
+          ${renderChip(`${files.length}`, "is-muted")}
+        </div>
+        <div class="workflow-mini-list">
+          ${files.map((file) => `<span>${escapeHtml(compactPath(file.filePath || ""))}</span>`).join("")}
+        </div>
+      </article>
+    ` : ""}
+    ${matches.length ? `
+      <article class="command-item">
+        <div class="command-item-head">
+          <strong>Reuse first</strong>
+          ${renderChip(`${matches.length}`, "is-muted")}
+        </div>
+        <div class="workflow-mini-list">
+          ${matches.map((match) => `<span>${escapeHtml(match.name)} · ${escapeHtml(match.recommendedAction || "review")}</span>`).join("")}
+        </div>
+      </article>
+    ` : ""}
+    ${recommendations.length ? `
+      <article class="command-item">
+        <div class="command-item-head">
+          <strong>Operator hints</strong>
+          ${renderChip(`${recommendations.length}`, "is-muted")}
+        </div>
+        <div class="workflow-mini-list">
+          ${recommendations.map((item) => `<span>${escapeHtml(truncateText(item, 140))}</span>`).join("")}
+        </div>
+      </article>
+    ` : ""}
+  `;
+}
+
+async function handleWorkflowPackAction(action) {
+  const payload = workflowPrepState.data;
+  if (!payload) {
+    return;
+  }
+
+  const workspacePath = payload.workspacePath || workflowPrepState.workspacePath || resolveDashboardWorkspacePath();
+  const primaryFile = payload.memory?.recommendedFiles?.[0]?.filePath || "";
+
+  try {
+    if (action === "copy-handoff") {
+      await copyTextToClipboard(buildWorkflowHandoffClipboardText(payload));
+      workflowPrepStatus.textContent = "Copied workflow handoff to clipboard.";
+      return;
+    }
+
+    if (action === "open-workspace") {
+      const response = await fetch("/api/open-path", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          targetPath: workspacePath,
+          mode: "open",
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.message || result.error || `Open workspace failed: ${response.status}`);
+      }
+      workflowPrepStatus.textContent = `Opened workspace ${compactPath(result.openedPath || workspacePath)}.`;
+      return;
+    }
+
+    if (action === "open-file") {
+      if (!primaryFile) {
+        workflowPrepStatus.textContent = "No recommended file available to open.";
+        return;
+      }
+      const response = await fetch("/api/open-path", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          targetPath: primaryFile,
+          mode: "reveal",
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.message || result.error || `Open file failed: ${response.status}`);
+      }
+      workflowPrepStatus.textContent = `Revealed ${compactPath(result.openedPath || primaryFile)}.`;
+    }
+  } catch (error) {
+    workflowPrepStatus.textContent = error.message || "Workflow action failed.";
+  }
+}
+
+function buildWorkflowHandoffClipboardText(payload) {
+  const lines = [
+    `Workflow: ${capitalizeWord(payload.purpose || workflowPrepState.purpose || "coding")}`,
+    `Workspace: ${payload.workspacePath || workflowPrepState.workspacePath || resolveDashboardWorkspacePath() || "-"}`,
+  ];
+
+  if (payload.runtime?.selected) {
+    lines.push(
+      `Runtime: ${payload.runtime.selected.profileName || payload.runtime.selected.providerName || payload.runtime.selected.providerId || "runtime"} · ${payload.runtime.selected.model || "default"}`
+    );
+  }
+
+  if (payload.handoff?.summary) {
+    lines.push(`Summary: ${payload.handoff.summary}`);
+  }
+  if (payload.handoff?.startWith) {
+    lines.push(`Start with: ${payload.handoff.startWith}`);
+  }
+  if (payload.implementation?.nextStep) {
+    lines.push(`Next step: ${payload.implementation.nextStep}`);
+  }
+
+  const files = (payload.memory?.recommendedFiles || []).slice(0, 3).map((entry) => compactPath(entry.filePath || ""));
+  if (files.length) {
+    lines.push(`Open first: ${files.join(" | ")}`);
+  }
+
+  const matches = (payload.memory?.projectMatches || []).slice(0, 3).map((entry) => `${entry.name} (${entry.recommendedAction || "review"})`);
+  if (matches.length) {
+    lines.push(`Reuse first: ${matches.join(" | ")}`);
+  }
+
+  const recommendations = (payload.memory?.recommendations || []).slice(0, 3);
+  if (recommendations.length) {
+    lines.push(`Hints: ${recommendations.join(" | ")}`);
+  }
+
+  return lines.join("\n");
+}
+
+async function copyTextToClipboard(value) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  textarea.style.pointerEvents = "none";
+  document.body.appendChild(textarea);
+  textarea.select();
+  const success = document.execCommand("copy");
+  document.body.removeChild(textarea);
+  if (!success) {
+    throw new Error("Clipboard copy is not available in this browser.");
+  }
+}
+
+function renderAiRuntimePanel() {
+  if (!aiRuntimePanel || !aiRuntimeMeta) {
+    return;
+  }
+
+  const workspacePath = aiRuntimeState.workspacePath || resolveDashboardWorkspacePath();
+  const pick = aiRuntimeState.pick;
+  const selected = pick?.selected || null;
+  const threads = aiRuntimeState.threads || [];
+  const status = aiRuntimeState.loading
+    ? "loading"
+    : aiRuntimeState.error
+      ? "error"
+      : pick?.status || selected?.providerStatus || "idle";
+
+  aiRuntimeMeta.textContent = selected
+    ? `${selected.providerKind || "provider"} · ${selected.model || "default"}`
+    : status === "loading"
+      ? "loading router"
+      : "local model router";
+
+  if (aiChatSendButton) {
+    aiChatSendButton.disabled = aiRuntimeState.sending || !workspacePath;
+    aiChatSendButton.textContent = aiRuntimeState.sending ? "Asking..." : "Ask";
+  }
+
+  if (aiChatStatus) {
+    aiChatStatus.textContent = aiRuntimeState.sending
+      ? "Sending message with compact workspace memory..."
+      : aiRuntimeState.lastReply
+        ? truncateText(aiRuntimeState.lastReply, 260)
+        : aiRuntimeState.error || "Runtime picker will choose the best local profile for this workspace.";
+  }
+
+  if (!workspacePath) {
+    aiRuntimePanel.innerHTML = `<p class="empty-state">Select a project workspace to enable internal AI chat.</p>`;
+    return;
+  }
+
+  if (aiRuntimeState.loading && !selected) {
+    aiRuntimePanel.innerHTML = `<p class="empty-state">Loading local runtime picker and chat memory...</p>`;
+    return;
+  }
+
+  if (aiRuntimeState.error) {
+    aiRuntimePanel.innerHTML = `
+      <article class="command-item command-item--hint">
+        <div class="command-item-head">
+          <strong>Runtime unavailable</strong>
+          ${renderChip("error", "is-danger")}
+        </div>
+        <p>${escapeHtml(aiRuntimeState.error)}</p>
+      </article>
+    `;
+    return;
+  }
+
+  const recommendation = (pick?.recommendations || [])[0] || null;
+  const candidateRows = (pick?.candidates || []).slice(1, 3);
+  const threadRows = threads.slice(0, 3);
+  aiRuntimePanel.innerHTML = `
+    <article class="command-item command-item--ai-runtime">
+      <div class="command-item-head">
+        <strong>${escapeHtml(selected?.profileName || selected?.providerName || "No runtime selected")}</strong>
+        ${renderChip(status, getAiRuntimeBadgeClass(status))}
+      </div>
+      <div class="ai-runtime-summary">
+        ${renderKeyValueLine("Provider", selected?.providerId || "not configured")}
+        ${renderKeyValueLine("Model", selected?.model || "default")}
+        ${renderKeyValueLine("Score", selected ? `${selected.score}` : "")}
+        ${renderKeyValueLine("Context", selected?.contextPolicy || "workspace-brain")}
+      </div>
+      ${(selected?.reasons || []).length ? `
+        <div class="command-chip-row">
+          ${selected.reasons.slice(0, 3).map((reason) => renderChip(reason, "is-info")).join("")}
+        </div>
+      ` : ""}
+      ${recommendation ? `
+        <div class="ai-runtime-recommendation">
+          <strong>${escapeHtml(recommendation.title || "Runtime hint")}</strong>
+          <p>${escapeHtml(recommendation.action || "")}</p>
+          ${recommendation.command ? `<code>${escapeHtml(recommendation.command)}</code>` : ""}
+        </div>
+      ` : ""}
+    </article>
+    ${candidateRows.length ? `
+      <article class="command-item">
+        <div class="command-item-head">
+          <strong>Fallback candidates</strong>
+          ${renderChip(`${candidateRows.length}`, "is-muted")}
+        </div>
+        <div class="ai-runtime-candidates">
+          ${candidateRows.map((candidate) => `
+            <span>${escapeHtml(candidate.profileName || candidate.providerName || candidate.providerId || "runtime")} · ${escapeHtml(candidate.model || "default")} · ${escapeHtml(candidate.providerStatus || "unknown")}</span>
+          `).join("")}
+        </div>
+      </article>
+    ` : ""}
+    ${threadRows.length ? `
+      <article class="command-item">
+        <div class="command-item-head">
+          <strong>Recent internal chats</strong>
+          ${renderChip(`${threadRows.length}`, "is-muted")}
+        </div>
+        <div class="ai-thread-list">
+          ${threadRows.map((thread) => `
+            <span>
+              <strong>${escapeHtml(thread.title || "AI chat thread")}</strong>
+              <small>${escapeHtml(thread.model || thread.providerId || "runtime pending")} · ${escapeHtml(formatRelativeTime(thread.updatedAt))}</small>
+              ${thread.summary ? `<em>${escapeHtml(truncateText(thread.summary, 120))}</em>` : ""}
+            </span>
+          `).join("")}
+        </div>
+      </article>
+    ` : `
+      <article class="command-item">
+        <p class="empty-state">No internal chat history yet. Ask a workspace question below to create one.</p>
+      </article>
+    `}
+  `;
+}
+
+function getAiRuntimeBadgeClass(status) {
+  if (status === "ready" || status === "healthy" || status === "success") {
+    return "is-success";
+  }
+  if (status === "needs_setup" || status === "unhealthy" || status === "error" || status === "failed") {
+    return "is-danger";
+  }
+  if (status === "loading") {
+    return "is-warning";
+  }
+  return "is-muted";
 }
 
 function renderKeyValueLine(label, value) {
@@ -1948,6 +2600,63 @@ async function handleMinimapDoubleClick(event) {
   }
 }
 
+async function handleAiChatSubmit(event) {
+  event.preventDefault();
+  const message = aiChatPrompt?.value.trim() || "";
+  const workspacePath = resolveDashboardWorkspacePath();
+  if (!message || !workspacePath || aiRuntimeState.sending) {
+    return;
+  }
+
+  aiRuntimeState = {
+    ...aiRuntimeState,
+    workspacePath,
+    sending: true,
+    error: null,
+    lastReply: null,
+  };
+  renderAiRuntimePanel();
+
+  try {
+    const response = await fetch("/api/ai/chat-threads/message", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        workspacePath,
+        purpose: "coding",
+        autoPick: true,
+        pickCheckHealth: false,
+        message,
+        returnLimit: 4,
+      }),
+    });
+
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.message || payload.error || `AI chat failed: ${response.status}`);
+    }
+
+    aiRuntimeState = {
+      ...aiRuntimeState,
+      sending: false,
+      error: payload.error || null,
+      lastReply: payload.assistantMessage?.content || payload.thread?.summary || "AI response stored.",
+    };
+    aiChatPrompt.value = "";
+    await loadAiRuntimeContext({ force: true });
+  } catch (error) {
+    aiRuntimeState = {
+      ...aiRuntimeState,
+      sending: false,
+      error: error.message,
+      lastReply: null,
+    };
+    renderAiRuntimePanel();
+  }
+}
+
 function matchesQuery(node, query) {
   if (!query) {
     return true;
@@ -2028,6 +2737,8 @@ async function selectNode(nodeId, options = {}) {
     }
     render();
     scheduleLowTokenContextRefresh({ delayMs: 2500 });
+    scheduleWorkflowPreparationRefresh({ delayMs: 2550 });
+    scheduleAiRuntimeRefresh({ delayMs: 2600 });
     if (options.syncPipeline) {
       await notifyPipelineOverviewSync(nodeId);
     }
@@ -2148,6 +2859,9 @@ async function handleRestoreLatestBackup() {
   }
   renderStorage();
   render();
+  scheduleLowTokenContextRefresh({ force: true, delayMs: 220 });
+  scheduleWorkflowPreparationRefresh({ force: true, delayMs: 300 });
+  scheduleAiRuntimeRefresh({ force: true, delayMs: 380 });
 }
 
 async function handleRepairGraph() {
@@ -2172,6 +2886,9 @@ async function handleRepairGraph() {
   }
   renderStorage();
   render();
+  scheduleLowTokenContextRefresh({ force: true, delayMs: 220 });
+  scheduleWorkflowPreparationRefresh({ force: true, delayMs: 300 });
+  scheduleAiRuntimeRefresh({ force: true, delayMs: 380 });
 }
 
 async function handleCrawlProjects(event) {
@@ -2201,11 +2918,21 @@ async function handleCrawlProjects(event) {
 
   storageFeedback.textContent = `Crawled ${payload.added} new / ${payload.updated} updated project nodes from ${payload.rootPath}`;
   await Promise.all([loadGraph(), loadStorageInfo()]);
+  workflowPrepState = {
+    ...workflowPrepState,
+    workspacePath: normalizePathLike(payload.workflow?.workspacePath || rootPath),
+    purpose: "crawl",
+    data: payload.workflow || workflowPrepState.data,
+    loadedAt: Date.now(),
+    loading: false,
+    error: null,
+  };
   if (graphFocusNodeId) {
     await loadContextGraph(graphFocusNodeId);
   }
   renderStorage();
   render();
+  renderWorkflowPreparation();
 }
 
 function seedDefaultCrawlRoot() {
@@ -4646,6 +5373,9 @@ async function handleImport(event) {
   }
   renderStorage();
   render();
+  scheduleLowTokenContextRefresh({ force: true, delayMs: 220 });
+  scheduleWorkflowPreparationRefresh({ force: true, delayMs: 300 });
+  scheduleAiRuntimeRefresh({ force: true, delayMs: 380 });
 }
 
 async function loadContextGraph(nodeId) {

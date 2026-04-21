@@ -187,6 +187,202 @@ async function handleApi(req, res, requestUrl) {
     return sendJson(res, 200, skill);
   }
 
+  if (method === "GET" && requestUrl.pathname === "/api/ai/providers") {
+    return sendJson(res, 200, db.listAiProviders({
+      kind: (requestUrl.searchParams.get("kind") || "").trim(),
+      status: (requestUrl.searchParams.get("status") || "").trim(),
+      limit: requestUrl.searchParams.get("limit"),
+    }));
+  }
+
+  if (method === "GET" && requestUrl.pathname === "/api/ai/provider") {
+    const provider = db.getAiProvider((requestUrl.searchParams.get("providerId") || "").trim());
+    if (!provider) {
+      return sendJson(res, 404, { error: "provider_not_found" });
+    }
+    return sendJson(res, 200, provider);
+  }
+
+  if (method === "GET" && requestUrl.pathname === "/api/ai/model-runs") {
+    return sendJson(res, 200, db.listAiModelRuns({
+      providerId: (requestUrl.searchParams.get("providerId") || requestUrl.searchParams.get("provider") || "").trim(),
+      runType: (requestUrl.searchParams.get("runType") || requestUrl.searchParams.get("type") || "").trim(),
+      limit: requestUrl.searchParams.get("limit"),
+    }));
+  }
+
+  if (method === "GET" && requestUrl.pathname === "/api/ai/setup-doctor") {
+    try {
+      return sendJson(res, 200, await db.runAiSetupDoctor({
+        timeoutMs: requestUrl.searchParams.get("timeoutMs"),
+        checkHealth: requestUrl.searchParams.get("checkHealth") !== "false",
+      }));
+    } catch (error) {
+      return sendJson(res, 400, {
+        error: "ai_setup_doctor_failed",
+        message: error.message,
+      });
+    }
+  }
+
+  if (method === "GET" && requestUrl.pathname === "/api/ai/runtime-pick") {
+    try {
+      return sendJson(res, 200, await db.pickAiRuntime({
+        purpose: (requestUrl.searchParams.get("purpose") || "").trim(),
+        timeoutMs: requestUrl.searchParams.get("timeoutMs"),
+        checkHealth: requestUrl.searchParams.get("checkHealth") === "true",
+        limit: requestUrl.searchParams.get("limit"),
+      }));
+    } catch (error) {
+      return sendJson(res, 400, {
+        error: "ai_runtime_pick_failed",
+        message: error.message,
+      });
+    }
+  }
+
+  if (method === "GET" && requestUrl.pathname === "/api/ai/runtime-profiles") {
+    return sendJson(res, 200, db.listAiRuntimeProfiles({
+      purpose: (requestUrl.searchParams.get("purpose") || "").trim(),
+      status: (requestUrl.searchParams.get("status") || "active").trim(),
+      limit: requestUrl.searchParams.get("limit"),
+    }));
+  }
+
+  if (method === "GET" && requestUrl.pathname === "/api/ai/runtime-profile") {
+    const profile = db.getAiRuntimeProfile((requestUrl.searchParams.get("profileId") || requestUrl.searchParams.get("profile") || "").trim());
+    if (!profile) {
+      return sendJson(res, 404, { error: "runtime_profile_not_found" });
+    }
+    return sendJson(res, 200, profile);
+  }
+
+  if (method === "GET" && requestUrl.pathname === "/api/ai/chat-threads") {
+    return sendJson(res, 200, db.listAiChatThreads({
+      workspacePath: (requestUrl.searchParams.get("workspacePath") || "").trim(),
+      status: (requestUrl.searchParams.get("status") || "active").trim(),
+      limit: requestUrl.searchParams.get("limit"),
+    }));
+  }
+
+  if (method === "GET" && requestUrl.pathname === "/api/ai/chat-thread") {
+    const thread = db.getAiChatThread((requestUrl.searchParams.get("threadId") || "").trim(), {
+      limit: requestUrl.searchParams.get("limit"),
+    });
+    if (!thread) {
+      return sendJson(res, 404, { error: "chat_thread_not_found" });
+    }
+    return sendJson(res, 200, thread);
+  }
+
+  if (method === "POST" && requestUrl.pathname === "/api/ai/providers") {
+    try {
+      const body = await readBody(req);
+      return sendJson(res, 201, db.registerAiProvider(body));
+    } catch (error) {
+      return sendJson(res, 400, {
+        error: "ai_provider_register_failed",
+        message: error.message,
+      });
+    }
+  }
+
+  if (method === "POST" && requestUrl.pathname === "/api/ai/providers/healthcheck") {
+    try {
+      const body = await readBody(req);
+      return sendJson(res, 200, await db.healthcheckAiProvider(body.providerId || body.provider, body));
+    } catch (error) {
+      return sendJson(res, 400, {
+        error: "ai_provider_healthcheck_failed",
+        message: error.message,
+      });
+    }
+  }
+
+  if (method === "POST" && requestUrl.pathname === "/api/ai/chat") {
+    try {
+      const body = await readBody(req);
+      return sendJson(res, 200, await db.chatWithAiProvider(body));
+    } catch (error) {
+      return sendJson(res, 400, {
+        error: "ai_chat_failed",
+        message: error.message,
+      });
+    }
+  }
+
+  if (method === "POST" && requestUrl.pathname === "/api/ai/harness/run") {
+    try {
+      const body = await readBody(req);
+      return sendJson(res, 200, await db.runAiHarness(body));
+    } catch (error) {
+      return sendJson(res, 400, {
+        error: "ai_harness_failed",
+        message: error.message,
+      });
+    }
+  }
+
+  if (method === "POST" && requestUrl.pathname === "/api/ai/setup-doctor") {
+    try {
+      const body = await readBody(req);
+      return sendJson(res, 200, await db.runAiSetupDoctor(body));
+    } catch (error) {
+      return sendJson(res, 400, {
+        error: "ai_setup_doctor_failed",
+        message: error.message,
+      });
+    }
+  }
+
+  if (method === "POST" && requestUrl.pathname === "/api/ai/runtime-pick") {
+    try {
+      const body = await readBody(req);
+      return sendJson(res, 200, await db.pickAiRuntime(body));
+    } catch (error) {
+      return sendJson(res, 400, {
+        error: "ai_runtime_pick_failed",
+        message: error.message,
+      });
+    }
+  }
+
+  if (method === "POST" && requestUrl.pathname === "/api/ai/runtime-profiles") {
+    try {
+      const body = await readBody(req);
+      return sendJson(res, 201, db.upsertAiRuntimeProfile(body));
+    } catch (error) {
+      return sendJson(res, 400, {
+        error: "ai_runtime_profile_failed",
+        message: error.message,
+      });
+    }
+  }
+
+  if (method === "POST" && requestUrl.pathname === "/api/ai/chat-threads") {
+    try {
+      const body = await readBody(req);
+      return sendJson(res, 201, db.startAiChatThread(body));
+    } catch (error) {
+      return sendJson(res, 400, {
+        error: "ai_chat_thread_failed",
+        message: error.message,
+      });
+    }
+  }
+
+  if (method === "POST" && requestUrl.pathname === "/api/ai/chat-threads/message") {
+    try {
+      const body = await readBody(req);
+      return sendJson(res, 200, await db.sendAiChatMessage(body));
+    } catch (error) {
+      return sendJson(res, 400, {
+        error: "ai_chat_thread_message_failed",
+        message: error.message,
+      });
+    }
+  }
+
   if (method === "GET" && requestUrl.pathname === "/api/project-module-match") {
     try {
       return sendJson(res, 200, db.matchProjectToReusableModules({
@@ -361,6 +557,24 @@ async function handleApi(req, res, requestUrl) {
     }
   }
 
+  if (method === "GET" && requestUrl.pathname === "/api/workflow/prepare") {
+    try {
+      return sendJson(res, 200, await db.prepareWorkflowExecution({
+        workspacePath: (requestUrl.searchParams.get("workspacePath") || "").trim(),
+        purpose: (requestUrl.searchParams.get("purpose") || "").trim(),
+        query: (requestUrl.searchParams.get("query") || "").trim(),
+        capability: (requestUrl.searchParams.get("capability") || "").trim(),
+        checkHealth: requestUrl.searchParams.get("checkHealth") === "true",
+        timeoutMs: requestUrl.searchParams.get("timeoutMs"),
+      }));
+    } catch (error) {
+      return sendJson(res, 400, {
+        error: "workflow_prepare_failed",
+        message: error.message,
+      });
+    }
+  }
+
   if (method === "GET" && requestUrl.pathname === "/api/activity/runs") {
     return sendJson(res, 200, {
       results: db.listActivityRuns({
@@ -430,6 +644,18 @@ async function handleApi(req, res, requestUrl) {
     }
   }
 
+  if (method === "POST" && requestUrl.pathname === "/api/workflow/prepare") {
+    const body = await readBody(req);
+    try {
+      return sendJson(res, 200, await db.prepareWorkflowExecution(body));
+    } catch (error) {
+      return sendJson(res, 400, {
+        error: "workflow_prepare_failed",
+        message: error.message,
+      });
+    }
+  }
+
   if (method === "POST" && requestUrl.pathname === "/api/module-adoptions/record") {
     const body = await readBody(req);
     try {
@@ -473,6 +699,18 @@ async function handleApi(req, res, requestUrl) {
     } catch (error) {
       return sendJson(res, 400, {
         error: "open_folder_failed",
+        message: error.message,
+      });
+    }
+  }
+
+  if (method === "POST" && requestUrl.pathname === "/api/open-path") {
+    const body = await readBody(req);
+    try {
+      return sendJson(res, 200, db.openSystemPath(body.targetPath, body));
+    } catch (error) {
+      return sendJson(res, 400, {
+        error: "open_path_failed",
         message: error.message,
       });
     }
@@ -531,14 +769,40 @@ async function handleApi(req, res, requestUrl) {
       const rootPath = body.rootPath;
       const crawled = crawlProjects(rootPath, { maxDepth: body.maxDepth });
       const merged = db.mergeCrawledNodes(crawled, rootPath);
+      const sample = crawled.slice(0, 12).map((node) => ({
+        id: node.id,
+        name: node.name,
+        path: node.files[0],
+        type: node.type,
+      }));
+      const workspacePaths = [...new Set(
+        sample
+          .filter((node) => node.type === "project" || node.type === "workspace")
+          .map((node) => node.path)
+          .filter(Boolean)
+      )].slice(0, 4);
+      const workflow = await db.prepareWorkflowExecution({
+        workspacePath: rootPath,
+        purpose: "crawl",
+        query: body.query || "crawl workspace memory and prepare reuse/runtime hints",
+        checkHealth: body.checkHealth,
+        toolSource: body.toolSource || "api",
+      });
+      const projectWorkflows = [];
+      for (const workspacePath of workspacePaths) {
+        projectWorkflows.push(await db.prepareWorkflowExecution({
+          workspacePath,
+          purpose: "crawl",
+          query: body.query || "prepare project after crawl",
+          checkHealth: false,
+          toolSource: body.toolSource || "api",
+        }));
+      }
       return sendJson(res, 200, {
         ...merged,
-        sample: crawled.slice(0, 12).map((node) => ({
-          id: node.id,
-          name: node.name,
-          path: node.files[0],
-          type: node.type,
-        })),
+        sample,
+        workflow,
+        projectWorkflows,
       });
     } catch (error) {
       return sendJson(res, 400, {

@@ -306,6 +306,78 @@ function initialize() {
       payload_json TEXT NOT NULL DEFAULT '{}'
     );
 
+    CREATE TABLE IF NOT EXISTS ai_providers (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      base_url TEXT NOT NULL,
+      api_key_ref TEXT,
+      default_model TEXT,
+      capabilities_json TEXT NOT NULL DEFAULT '[]',
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      status TEXT NOT NULL DEFAULT 'unknown',
+      privacy_level TEXT NOT NULL DEFAULT 'local',
+      last_healthcheck_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS ai_model_runs (
+      id TEXT PRIMARY KEY,
+      provider_id TEXT NOT NULL,
+      model TEXT NOT NULL,
+      run_type TEXT NOT NULL,
+      status TEXT NOT NULL,
+      prompt TEXT NOT NULL DEFAULT '',
+      response_preview TEXT NOT NULL DEFAULT '',
+      latency_ms INTEGER NOT NULL DEFAULT 0,
+      input_tokens INTEGER,
+      output_tokens INTEGER,
+      tokens_per_second REAL,
+      error TEXT,
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS ai_runtime_profiles (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      purpose TEXT NOT NULL,
+      provider_id TEXT,
+      model TEXT,
+      temperature REAL,
+      max_tokens INTEGER,
+      context_policy TEXT NOT NULL DEFAULT 'workspace-brain',
+      status TEXT NOT NULL DEFAULT 'active',
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS ai_chat_threads (
+      id TEXT PRIMARY KEY,
+      workspace_path TEXT NOT NULL,
+      title TEXT NOT NULL,
+      profile_id TEXT,
+      provider_id TEXT,
+      model TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      summary TEXT NOT NULL DEFAULT '',
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS ai_chat_messages (
+      id TEXT PRIMARY KEY,
+      thread_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      run_id TEXT,
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS pipeline_cache (
       cache_key TEXT PRIMARY KEY,
       root_path TEXT NOT NULL,
@@ -324,8 +396,8 @@ function initialize() {
   }
 
   try {
-    if (getMeta("schemaVersion") !== "5") {
-      setMeta("schemaVersion", "5");
+    if (getMeta("schemaVersion") !== "7") {
+      setMeta("schemaVersion", "7");
     }
     ensureDefaultConfig();
     migrateFromLegacyJsonIfNeeded();
@@ -343,6 +415,183 @@ function ensureDefaultConfig() {
   if (!getMeta("vaultScaffoldVersion")) {
     setMeta("vaultScaffoldVersion", "1");
   }
+  ensureDefaultAiProviders();
+  ensureDefaultAiRuntimeProfiles();
+}
+
+function ensureDefaultAiProviders() {
+  const now = nowIso();
+  const defaults = [
+    {
+      id: "provider-ollama-local",
+      name: "Ollama Local",
+      kind: "ollama",
+      baseUrl: "http://localhost:11434/v1",
+      defaultModel: "llama3.2",
+      capabilities: ["chat", "json", "embeddings", "local", "harness"],
+      privacyLevel: "local",
+      metadata: {
+        openaiCompatible: true,
+        docs: "https://docs.ollama.com/openai",
+      },
+    },
+    {
+      id: "provider-llamacpp-local",
+      name: "llama.cpp Local",
+      kind: "llamacpp",
+      baseUrl: "http://localhost:8080/v1",
+      defaultModel: "local-model",
+      capabilities: ["chat", "json", "embeddings", "rerank", "local", "harness"],
+      privacyLevel: "local",
+      metadata: {
+        openaiCompatible: true,
+        docs: "https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md",
+      },
+    },
+    {
+      id: "provider-vllm-local",
+      name: "vLLM Local",
+      kind: "vllm",
+      baseUrl: "http://localhost:8000/v1",
+      defaultModel: "local-model",
+      capabilities: ["chat", "json", "tools", "local", "harness"],
+      privacyLevel: "local",
+      metadata: {
+        openaiCompatible: true,
+        docs: "https://docs.vllm.ai/en/stable/serving/openai_compatible_server.html",
+      },
+    },
+    {
+      id: "provider-lmstudio-local",
+      name: "LM Studio Local",
+      kind: "lmstudio",
+      baseUrl: "http://localhost:1234/v1",
+      defaultModel: "local-model",
+      capabilities: ["chat", "json", "embeddings", "local", "harness"],
+      privacyLevel: "local",
+      metadata: {
+        openaiCompatible: true,
+        docs: "https://lmstudio.ai/docs/app/api/endpoints/openai",
+      },
+    },
+    {
+      id: "provider-harness-local",
+      name: "Local Model Harness",
+      kind: "harness",
+      baseUrl: "http://localhost:9000/v1",
+      defaultModel: "local-model",
+      capabilities: ["chat", "evaluation", "benchmark", "local", "harness"],
+      privacyLevel: "local",
+      metadata: {
+        openaiCompatible: true,
+        docs: "https://github.com/EleutherAI/lm-evaluation-harness",
+      },
+    },
+  ];
+
+  const insert = db.prepare(`
+    INSERT INTO ai_providers (
+      id, name, kind, base_url, api_key_ref, default_model, capabilities_json,
+      metadata_json, status, privacy_level, last_healthcheck_at, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO NOTHING
+  `);
+
+  defaults.forEach((provider) => {
+    const metadata = {
+      ...provider.metadata,
+      harness: buildAiHarnessMetadata(provider.kind, provider.baseUrl, provider.defaultModel),
+    };
+    insert.run(
+      provider.id,
+      provider.name,
+      provider.kind,
+      provider.baseUrl,
+      null,
+      provider.defaultModel,
+      JSON.stringify(provider.capabilities),
+      JSON.stringify(metadata),
+      "unknown",
+      provider.privacyLevel,
+      null,
+      now,
+      now
+    );
+    const row = db.prepare("SELECT metadata_json FROM ai_providers WHERE id = ?").get(provider.id);
+    const existingMetadata = parseJsonObject(row?.metadata_json);
+    if (!existingMetadata.harness) {
+      db.prepare("UPDATE ai_providers SET metadata_json = ?, updated_at = ? WHERE id = ?")
+        .run(JSON.stringify({ ...existingMetadata, harness: metadata.harness }), now, provider.id);
+    }
+  });
+}
+
+function ensureDefaultAiRuntimeProfiles() {
+  const now = nowIso();
+  const defaults = [
+    {
+      id: "profile-local-chat",
+      name: "Local Chat",
+      purpose: "chat",
+      providerId: "provider-ollama-local",
+      model: "llama3.2",
+      temperature: 0.3,
+      maxTokens: 768,
+      contextPolicy: "workspace-brain",
+      metadata: {
+        description: "General internal chat with compact Graph Memory workspace context.",
+      },
+    },
+    {
+      id: "profile-local-coding",
+      name: "Local Coding",
+      purpose: "coding",
+      providerId: "provider-ollama-local",
+      model: "qwen2.5-coder",
+      temperature: 0.15,
+      maxTokens: 1400,
+      contextPolicy: "workspace-brain",
+      metadata: {
+        description: "Coding assistant profile optimized for local code tasks and low-token project memory.",
+      },
+    },
+    {
+      id: "profile-local-harness",
+      name: "Local Harness",
+      purpose: "harness",
+      providerId: "provider-harness-local",
+      model: "local-model",
+      temperature: 0,
+      maxTokens: 512,
+      contextPolicy: "none",
+      metadata: {
+        description: "Evaluation profile for local model harness or OpenAI-compatible benchmark adapters.",
+      },
+    },
+  ];
+  const insert = db.prepare(`
+    INSERT INTO ai_runtime_profiles (
+      id, name, purpose, provider_id, model, temperature, max_tokens,
+      context_policy, status, metadata_json, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO NOTHING
+  `);
+  defaults.forEach((profile) => {
+    insert.run(
+      profile.id,
+      profile.name,
+      profile.purpose,
+      profile.providerId,
+      profile.model,
+      profile.temperature,
+      profile.maxTokens,
+      profile.contextPolicy,
+      "active",
+      JSON.stringify(profile.metadata),
+      now,
+      now
+    );
+  });
 }
 
 function migrateFromLegacyJsonIfNeeded() {
@@ -1498,6 +1747,1041 @@ function getBrainContext(options = {}) {
   };
 }
 
+async function prepareWorkflowExecution(options = {}) {
+  const workspacePath = normalizeWorkspacePath(options.workspacePath || "");
+  if (!workspacePath) {
+    throw new Error("workspacePath la bat buoc.");
+  }
+  const purpose = normalizeAiProfilePurpose(options.purpose || options.profilePurpose || "coding");
+  const query = normalizeOptionalText(options.query || options.commandText || options.prompt || "") || "";
+  const lowToken = getLowTokenContext({
+    ...options,
+    workspacePath,
+    query,
+    capability: options.capability || query,
+    toolSource: options.toolSource || "agent",
+    moduleLimit: options.moduleLimit || 4,
+    matchLimit: options.matchLimit || 4,
+  });
+  const brain = getBrainContext({
+    ...options,
+    workspacePath,
+    query,
+    capability: options.capability || query,
+    toolSource: options.toolSource || "agent",
+    moduleLimit: options.moduleLimit || 4,
+    matchLimit: options.matchLimit || 4,
+  });
+  const runtimePick = await pickAiRuntime({
+    purpose,
+    timeoutMs: options.timeoutMs,
+    checkHealth: options.checkHealth === true || options.checkHealth === "true",
+    limit: options.runtimeLimit || 3,
+  });
+  const implementation = getImplementationContext({
+    workspacePath,
+    query,
+    limit: clampNumber(options.threadLimit, 3, 1, 10),
+    recentLimit: clampNumber(options.recentLimit, 2, 1, 10),
+    eventLimit: clampNumber(options.eventLimit, 4, 1, 12),
+  });
+  const primaryThread = implementation.primaryThread || lowToken.implementation?.primaryThread || null;
+  const recommendedFiles = (lowToken.debugContext?.recommendedFiles || []).slice(0, 6);
+  const moduleMatches = (lowToken.projectMatches || []).slice(0, 4);
+  const topSkill = (brain.skills || [])[0] || null;
+  const selectedRuntime = runtimePick?.selected || null;
+
+  return {
+    workspacePath,
+    purpose,
+    query,
+    status: selectedRuntime?.providerStatus === "healthy" ? "ready" : "needs_setup",
+    runtime: {
+      status: runtimePick.status,
+      selected: selectedRuntime,
+      recommendations: (runtimePick.recommendations || []).slice(0, 3),
+      checkedAt: runtimePick.checkedAt,
+    },
+    memory: {
+      tokenEstimate: lowToken.tokenEstimate || 0,
+      project: lowToken.project || null,
+      topSkill: topSkill
+        ? {
+            id: topSkill.id,
+            name: topSkill.name,
+            summary: topSkill.summary,
+            capabilities: topSkill.capabilities,
+          }
+        : null,
+      recommendedFiles: recommendedFiles.map((entry) => ({
+        filePath: entry.filePath,
+        score: entry.score,
+        relatedNodeIds: (entry.relatedNodeIds || []).slice(0, 3),
+      })),
+      projectMatches: moduleMatches.map((entry) => ({
+        id: entry.id,
+        name: entry.name,
+        score: entry.score,
+        recommendedAction: entry.recommendedAction,
+        summary: entry.summary,
+      })),
+      recommendations: (brain.recommendations || []).slice(0, 6),
+    },
+    implementation: primaryThread
+      ? {
+          id: primaryThread.id,
+          title: primaryThread.title,
+          status: primaryThread.status,
+          currentStep: primaryThread.currentStep,
+          nextStep: primaryThread.nextStep,
+          blocker: primaryThread.blocker,
+          touchedFiles: (primaryThread.touchedFiles || []).slice(0, 5),
+        }
+      : null,
+    handoff: {
+      startWith:
+        primaryThread?.nextStep ||
+        primaryThread?.currentStep ||
+        recommendedFiles[0]?.filePath ||
+        moduleMatches[0]?.summary ||
+        "Open low-token context before scanning raw source.",
+      summary: buildWorkflowPreparationSummary({
+        purpose,
+        runtimePick,
+        lowToken,
+        implementation: primaryThread,
+        topSkill,
+      }),
+    },
+  };
+}
+
+function listAiProviders(filters = {}) {
+  const kind = normalizeAiProviderKind(filters.kind || "") || "";
+  const status = normalizeOptionalText(filters.status || "") || "";
+  const limit = clampNumber(filters.limit, 20, 1, 100);
+  const rows = db.prepare(`
+    SELECT *
+    FROM ai_providers
+    WHERE (? = '' OR kind = ?)
+      AND (? = '' OR status = ?)
+    ORDER BY
+      CASE privacy_level WHEN 'local' THEN 0 WHEN 'lan' THEN 1 ELSE 2 END,
+      updated_at DESC,
+      name ASC
+    LIMIT ?
+  `).all(kind, kind, status, status, limit);
+
+  return {
+    count: rows.length,
+    providers: rows.map(fromAiProviderRow),
+  };
+}
+
+function getAiProvider(providerId) {
+  const text = normalizeOptionalText(providerId || "");
+  if (!text) {
+    const row = db.prepare(`
+      SELECT *
+      FROM ai_providers
+      ORDER BY
+        CASE status WHEN 'healthy' THEN 0 WHEN 'unknown' THEN 1 ELSE 2 END,
+        CASE privacy_level WHEN 'local' THEN 0 WHEN 'lan' THEN 1 ELSE 2 END,
+        CASE kind WHEN 'ollama' THEN 0 WHEN 'vllm' THEN 1 WHEN 'llamacpp' THEN 2 WHEN 'lmstudio' THEN 3 WHEN 'harness' THEN 4 ELSE 5 END,
+        updated_at DESC
+      LIMIT 1
+    `).get();
+    return row ? fromAiProviderRow(row) : null;
+  }
+  const row = db.prepare(`
+    SELECT *
+    FROM ai_providers
+    WHERE id = ? OR lower(name) = lower(?) OR kind = ?
+    ORDER BY
+      CASE status WHEN 'healthy' THEN 0 WHEN 'unknown' THEN 1 ELSE 2 END,
+      updated_at DESC
+    LIMIT 1
+  `).get(text, text, normalizeAiProviderKind(text));
+  return row ? fromAiProviderRow(row) : null;
+}
+
+function registerAiProvider(payload = {}) {
+  const kind = normalizeAiProviderKind(payload.kind || "openai_compatible") || "openai_compatible";
+  const name = normalizeOptionalText(payload.name) || providerDefaultName(kind);
+  const baseUrl = normalizeAiBaseUrl(payload.baseUrl || payload.base_url || payload.url);
+  if (!baseUrl) {
+    throw new Error("baseUrl la bat buoc.");
+  }
+  const id = normalizeOptionalText(payload.id) || `provider-${sanitizeId(`${kind}-${name}`)}`;
+  const now = nowIso();
+  const existing = db.prepare("SELECT * FROM ai_providers WHERE id = ?").get(id);
+  const capabilities = uniqueStrings([
+    ...normalizeStringArray(payload.capabilities),
+    ...inferAiProviderCapabilities(kind, payload),
+  ]);
+  const metadata = {
+    ...(payload.metadata && typeof payload.metadata === "object" ? payload.metadata : {}),
+    openaiCompatible: true,
+    harness: buildAiHarnessMetadata(kind, baseUrl, payload.defaultModel || payload.model),
+  };
+
+  db.prepare(`
+    INSERT INTO ai_providers (
+      id, name, kind, base_url, api_key_ref, default_model, capabilities_json,
+      metadata_json, status, privacy_level, last_healthcheck_at, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      name = excluded.name,
+      kind = excluded.kind,
+      base_url = excluded.base_url,
+      api_key_ref = excluded.api_key_ref,
+      default_model = excluded.default_model,
+      capabilities_json = excluded.capabilities_json,
+      metadata_json = excluded.metadata_json,
+      privacy_level = excluded.privacy_level,
+      updated_at = excluded.updated_at
+  `).run(
+    id,
+    name,
+    kind,
+    baseUrl,
+    normalizeOptionalText(payload.apiKeyRef || payload.api_key_ref || payload.apiKey || ""),
+    normalizeOptionalText(payload.defaultModel || payload.model || ""),
+    JSON.stringify(capabilities),
+    JSON.stringify(metadata),
+    existing?.status || "unknown",
+    normalizeAiPrivacyLevel(payload.privacyLevel || payload.privacy_level || inferAiPrivacyLevel(baseUrl)),
+    existing?.last_healthcheck_at || null,
+    existing?.created_at || now,
+    now
+  );
+
+  return getAiProvider(id);
+}
+
+async function healthcheckAiProvider(providerId, options = {}) {
+  const provider = getAiProvider(providerId || options.providerId || options.provider);
+  if (!provider) {
+    throw new Error("Khong tim thay AI provider.");
+  }
+  const startedAt = Date.now();
+  const now = nowIso();
+  let status = "healthy";
+  let error = null;
+  let models = [];
+  try {
+    const response = await fetch(buildAiProviderUrl(provider.baseUrl, "/models"), {
+      method: "GET",
+      headers: buildAiHeaders(provider),
+      signal: AbortSignal.timeout(clampNumber(options.timeoutMs, 8000, 1000, 60000)),
+    });
+    if (!response.ok) {
+      throw new Error(`models endpoint returned ${response.status}`);
+    }
+    const payload = await response.json();
+    models = Array.isArray(payload.data)
+      ? payload.data.map((model) => model.id || model.name || model.model).filter(Boolean)
+      : [];
+  } catch (caught) {
+    status = "unreachable";
+    error = caught.message;
+  }
+
+  db.prepare(`
+    UPDATE ai_providers
+    SET status = ?, last_healthcheck_at = ?, updated_at = ?
+    WHERE id = ?
+  `).run(status, now, now, provider.id);
+
+  const run = insertAiModelRun({
+    providerId: provider.id,
+    model: provider.defaultModel || models[0] || "unknown",
+    runType: "healthcheck",
+    status,
+    prompt: "GET /models",
+    responsePreview: models.slice(0, 8).join(", "),
+    latencyMs: Date.now() - startedAt,
+    error,
+    metadata: {
+      models,
+      modelCount: models.length,
+      baseUrl: provider.baseUrl,
+    },
+  });
+
+  return {
+    provider: getAiProvider(provider.id),
+    status,
+    models,
+    latencyMs: run.latencyMs,
+    error,
+    run,
+  };
+}
+
+async function chatWithAiProvider(payload = {}) {
+  const provider = getAiProvider(payload.providerId || payload.provider || payload.kind);
+  if (!provider) {
+    throw new Error("Khong tim thay AI provider.");
+  }
+  const model = normalizeOptionalText(payload.model) || provider.defaultModel;
+  if (!model) {
+    throw new Error("model la bat buoc neu provider chua co defaultModel.");
+  }
+  const userQuery = normalizeOptionalText(payload.query || payload.prompt || payload.message || "");
+  const messages = normalizeAiMessages(payload.messages, userQuery);
+  if (!messages.length) {
+    throw new Error("Can truyen query/message hoac messages.");
+  }
+  const workspacePath = normalizeWorkspacePath(payload.workspacePath || "");
+  const contextPack = workspacePath
+    ? buildAiContextPack({ ...payload, workspacePath, query: userQuery })
+    : null;
+  const finalMessages = contextPack
+    ? [{ role: "system", content: contextPack.systemPrompt }, ...messages]
+    : messages;
+
+  const startedAt = Date.now();
+  let status = "completed";
+  let error = null;
+  let result = null;
+  try {
+    result = await callOpenAiCompatibleChat(provider, {
+      model,
+      messages: finalMessages,
+      temperature: payload.temperature,
+      maxTokens: payload.maxTokens || payload.max_tokens,
+      timeoutMs: payload.timeoutMs,
+    });
+  } catch (caught) {
+    status = "failed";
+    error = caught.message;
+  }
+
+  const latencyMs = Date.now() - startedAt;
+  const content = result?.content || "";
+  const usage = result?.usage || {};
+  const outputTokens = usage.completion_tokens ?? estimateTextTokens(content);
+  const run = insertAiModelRun({
+    providerId: provider.id,
+    model,
+    runType: "chat",
+    status,
+    prompt: messages.map((message) => `${message.role}: ${message.content}`).join("\n\n").slice(0, 4000),
+    responsePreview: content.slice(0, 1200),
+    latencyMs,
+    inputTokens: usage.prompt_tokens ?? estimateTextTokens(JSON.stringify(finalMessages)),
+    outputTokens,
+    tokensPerSecond: latencyMs > 0 ? Number((outputTokens / (latencyMs / 1000)).toFixed(2)) : null,
+    error,
+    metadata: {
+      contextPack: compactAiContextPackForStorage(contextPack),
+      finishReason: result?.finishReason || null,
+      requestModel: model,
+    },
+  });
+
+  if (payload.nodeId && userQuery) {
+    addChat(payload.nodeId, userQuery, "user");
+    if (content) {
+      addChat(payload.nodeId, content, "assistant");
+    }
+  }
+
+  return {
+    provider,
+    model,
+    status,
+    content,
+    error,
+    run,
+    contextPack: compactAiContextPackForStorage(contextPack),
+    usage: {
+      inputTokens: run.inputTokens,
+      outputTokens: run.outputTokens,
+      tokensPerSecond: run.tokensPerSecond,
+      latencyMs,
+    },
+  };
+}
+
+async function runAiHarness(payload = {}) {
+  const provider = getAiProvider(payload.providerId || payload.provider || payload.kind);
+  if (!provider) {
+    throw new Error("Khong tim thay AI provider.");
+  }
+  const model = normalizeOptionalText(payload.model) || provider.defaultModel;
+  if (!model) {
+    throw new Error("model la bat buoc de chay harness.");
+  }
+  const suite = normalizeOptionalText(payload.suite || payload.harness || "smoke") || "smoke";
+  const adapter = detectLmEvaluationHarness();
+  const importPath = normalizeOptionalText(payload.importPath || payload.importResultPath || payload.resultPath);
+  const requestedMode = normalizeAiHarnessMode(payload.mode || payload.adapterMode || (importPath ? "import" : "auto"));
+
+  if (importPath) {
+    return importAiHarnessResult({
+      ...payload,
+      providerId: provider.id,
+      provider,
+      model,
+      suite,
+      importPath,
+      adapter,
+    });
+  }
+
+  if (requestedMode === "external" || (requestedMode === "auto" && adapter.available && resolveAiHarnessTasks(payload, suite).length)) {
+    try {
+      return runExternalAiHarness({
+        ...payload,
+        provider,
+        model,
+        suite,
+        adapter,
+      });
+    } catch (error) {
+      if (requestedMode === "external") {
+        throw error;
+      }
+    }
+  }
+
+  const prompts = buildAiHarnessPrompts(suite, payload);
+  const results = [];
+  for (const prompt of prompts) {
+    const startedAt = Date.now();
+    let status = "completed";
+    let error = null;
+    let content = "";
+    let usage = {};
+    try {
+      const response = await callOpenAiCompatibleChat(provider, {
+        model,
+        messages: [{ role: "user", content: prompt.prompt }],
+        temperature: prompt.temperature ?? 0,
+        maxTokens: prompt.maxTokens ?? 96,
+        timeoutMs: payload.timeoutMs,
+      });
+      content = response.content || "";
+      usage = response.usage || {};
+      if (prompt.expectIncludes && !content.toLowerCase().includes(prompt.expectIncludes.toLowerCase())) {
+        status = "warning";
+        error = `Expected response to include: ${prompt.expectIncludes}`;
+      }
+    } catch (caught) {
+      status = "failed";
+      error = caught.message;
+    }
+    const latencyMs = Date.now() - startedAt;
+    const outputTokens = usage.completion_tokens ?? estimateTextTokens(content);
+    results.push(insertAiModelRun({
+      providerId: provider.id,
+      model,
+      runType: `harness:${suite}`,
+      status,
+      prompt: prompt.prompt,
+      responsePreview: content.slice(0, 1200),
+      latencyMs,
+      inputTokens: usage.prompt_tokens ?? estimateTextTokens(prompt.prompt),
+      outputTokens,
+      tokensPerSecond: latencyMs > 0 ? Number((outputTokens / (latencyMs / 1000)).toFixed(2)) : null,
+      error,
+      metadata: {
+        suite,
+        check: prompt.name,
+        externalHarness: buildExternalHarnessHint(provider, model, suite),
+      },
+    }));
+  }
+
+  const passed = results.filter((run) => run.status === "completed").length;
+  return {
+    provider,
+    model,
+    suite,
+    status: results.some((run) => run.status === "failed")
+      ? "failed"
+      : results.some((run) => run.status === "warning")
+        ? "warning"
+        : "completed",
+    passed,
+    total: results.length,
+    averageLatencyMs: Math.round(results.reduce((sum, run) => sum + run.latencyMs, 0) / Math.max(results.length, 1)),
+    averageTokensPerSecond: Number(
+      (
+        results.reduce((sum, run) => sum + Number(run.tokensPerSecond || 0), 0) /
+        Math.max(results.filter((run) => run.tokensPerSecond).length, 1)
+      ).toFixed(2)
+    ),
+    runs: results,
+    externalHarness: buildExternalHarnessHint(provider, model, suite, {
+      mode: "builtin",
+      adapterAvailable: adapter.available,
+    }),
+  };
+}
+
+function runExternalAiHarness(payload = {}) {
+  const provider = payload.provider;
+  const model = normalizeOptionalText(payload.model) || provider?.defaultModel;
+  if (!provider || !model) {
+    throw new Error("External harness can not start without provider and model.");
+  }
+
+  const adapter = payload.adapter || detectLmEvaluationHarness();
+  if (!adapter.available) {
+    throw new Error(adapter.error || "lm-evaluation-harness is not available.");
+  }
+
+  const suite = normalizeOptionalText(payload.suite || "smoke") || "smoke";
+  const tasks = resolveAiHarnessTasks(payload, suite);
+  if (!tasks.length) {
+    throw new Error("External harness requires at least one task. Pass --tasks gsm8k or use builtin mode.");
+  }
+
+  const execution = buildExternalAiHarnessExecution({
+    provider,
+    model,
+    suite,
+    tasks,
+    payload,
+  });
+  const startedAt = Date.now();
+  const result = spawnSync(adapter.command, execution.args, {
+    cwd: normalizeWorkspacePath(payload.workspacePath || "") || ROOT,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: clampNumber(payload.timeoutMs, 300000, 1000, 3600000),
+    env: {
+      ...process.env,
+      PYTHONUTF8: "1",
+    },
+  });
+  const latencyMs = Date.now() - startedAt;
+  const stdout = String(result.stdout || "").trim();
+  const stderr = String(result.stderr || "").trim();
+  if (result.error) {
+    throw new Error(`lm_eval failed: ${result.error.message}`);
+  }
+
+  const imported = importAiHarnessResult({
+    ...payload,
+    provider,
+    providerId: provider.id,
+    model,
+    suite,
+    importPath: execution.outputPath,
+    adapter,
+    command: [adapter.command, ...execution.args].join(" "),
+    executionStatus: result.status === 0 ? "completed" : "failed",
+    executionStdout: stdout,
+    executionStderr: stderr,
+    executionLatencyMs: latencyMs,
+    executionOutputPath: execution.outputPath,
+  });
+
+  if (result.status !== 0) {
+    imported.status = "failed";
+    imported.error = stderr || stdout || `lm_eval exited with status ${result.status}`;
+  }
+  imported.command = [adapter.command, ...execution.args].join(" ");
+  imported.adapter = adapter;
+  imported.externalHarness = buildExternalHarnessHint(provider, model, suite, {
+    mode: "external",
+    tasks,
+    command: imported.command,
+    outputPath: execution.outputPath,
+    adapterAvailable: adapter.available,
+  });
+  return imported;
+}
+
+function importAiHarnessResult(payload = {}) {
+  const provider = payload.provider || getAiProvider(payload.providerId || payload.provider || payload.kind);
+  if (!provider) {
+    throw new Error("Khong tim thay AI provider.");
+  }
+  const model = normalizeOptionalText(payload.model) || provider.defaultModel;
+  const suite = normalizeOptionalText(payload.suite || payload.harness || "smoke") || "smoke";
+  const importPath = normalizeOptionalText(payload.importPath || payload.resultPath || payload.outputPath);
+  if (!importPath) {
+    throw new Error("importPath la bat buoc.");
+  }
+
+  const parsed = parseAiHarnessResultImport(importPath);
+  const aggregate = summarizeImportedAiHarnessResult(parsed, {
+    provider,
+    model,
+    suite,
+    executionStatus: payload.executionStatus,
+    executionStdout: payload.executionStdout,
+    executionStderr: payload.executionStderr,
+    executionLatencyMs: payload.executionLatencyMs,
+  });
+  const run = insertAiModelRun({
+    providerId: provider.id,
+    model,
+    runType: `harness:external:${suite}`,
+    status: aggregate.status,
+    prompt: aggregate.tasks.join(", "),
+    responsePreview: aggregate.summary,
+    latencyMs: aggregate.latencyMs,
+    inputTokens: null,
+    outputTokens: null,
+    tokensPerSecond: null,
+    error: aggregate.error,
+    metadata: {
+      suite,
+      mode: payload.executionStatus ? "external" : "import",
+      importPath: parsed.resolvedPath,
+      outputPath: normalizeOptionalText(payload.executionOutputPath || payload.outputPath) || null,
+      command: normalizeOptionalText(payload.command) || null,
+      tasks: aggregate.tasks,
+      taskMetrics: aggregate.taskMetrics,
+      rawResults: parsed.results,
+      stdout: String(payload.executionStdout || "").slice(0, 2400),
+      stderr: String(payload.executionStderr || "").slice(0, 2400),
+      externalHarness: buildExternalHarnessHint(provider, model, suite, {
+        mode: payload.executionStatus ? "external" : "import",
+        tasks: aggregate.tasks,
+        outputPath: parsed.resolvedPath,
+        adapterAvailable: (payload.adapter || detectLmEvaluationHarness()).available,
+      }),
+    },
+  });
+
+  const verification = maybePersistAiHarnessVerification({
+    ...payload,
+    provider,
+    model,
+    suite,
+    aggregate,
+    run,
+    importPath: parsed.resolvedPath,
+  });
+
+  return {
+    provider,
+    model,
+    suite,
+    status: aggregate.status,
+    passed: aggregate.passedCount,
+    total: aggregate.totalCount,
+    averageLatencyMs: aggregate.latencyMs,
+    averageTokensPerSecond: null,
+    runs: [run],
+    importedFrom: parsed.resolvedPath,
+    taskMetrics: aggregate.taskMetrics,
+    summary: aggregate.summary,
+    verification,
+    externalHarness: buildExternalHarnessHint(provider, model, suite, {
+      mode: payload.executionStatus ? "external" : "import",
+      tasks: aggregate.tasks,
+      outputPath: parsed.resolvedPath,
+      adapterAvailable: (payload.adapter || detectLmEvaluationHarness()).available,
+    }),
+    error: aggregate.error || null,
+  };
+}
+
+function listAiModelRuns(filters = {}) {
+  const providerId = normalizeOptionalText(filters.providerId || filters.provider || "") || "";
+  const runType = normalizeOptionalText(filters.runType || filters.type || "") || "";
+  const limit = clampNumber(filters.limit, 20, 1, 100);
+  const rows = db.prepare(`
+    SELECT *
+    FROM ai_model_runs
+    WHERE (? = '' OR provider_id = ?)
+      AND (? = '' OR run_type = ?)
+    ORDER BY created_at DESC
+    LIMIT ?
+  `).all(providerId, providerId, runType, runType, limit);
+  return {
+    count: rows.length,
+    runs: rows.map(fromAiModelRunRow),
+  };
+}
+
+async function runAiSetupDoctor(options = {}) {
+  const timeoutMs = clampNumber(options.timeoutMs, 1200, 300, 30000);
+  const checkHealth = options.checkHealth !== false && options.checkHealth !== "false";
+  const providers = listAiProviders({ limit: 100 }).providers;
+  const profiles = listAiRuntimeProfiles({ status: "", limit: 100 }).profiles;
+  const health = [];
+
+  for (const provider of providers) {
+    if (!checkHealth) {
+      health.push({
+        provider,
+        status: provider.status,
+        models: [],
+        latencyMs: null,
+        error: null,
+      });
+      continue;
+    }
+    try {
+      const result = await healthcheckAiProvider(provider.id, { timeoutMs });
+      health.push({
+        provider: result.provider,
+        status: result.status,
+        models: result.models,
+        latencyMs: result.latencyMs,
+        error: result.error,
+      });
+    } catch (error) {
+      health.push({
+        provider,
+        status: "failed",
+        models: [],
+        latencyMs: null,
+        error: error.message,
+      });
+    }
+  }
+
+  const commands = detectLocalAiCommands();
+  const recommendations = buildAiDoctorRecommendations({ health, profiles, commands });
+  return {
+    status: recommendations.some((item) => item.severity === "high")
+      ? "needs_setup"
+      : recommendations.some((item) => item.severity === "medium")
+        ? "needs_tuning"
+        : "ready",
+    checkedAt: nowIso(),
+    providers: health,
+    profiles,
+    commands,
+    recommendations,
+    nextTasks: buildLocalAiRoadmapTasks(),
+  };
+}
+
+async function pickAiRuntime(options = {}) {
+  const purpose = normalizeAiProfilePurpose(options.purpose || options.profilePurpose || "chat");
+  const checkHealth = options.checkHealth === true || options.checkHealth === "true";
+  const doctor = await runAiSetupDoctor({
+    timeoutMs: options.timeoutMs,
+    checkHealth,
+  });
+  const profiles = doctor.profiles.filter((profile) => profile.status === "active");
+  const healthByProviderId = new Map(doctor.providers.map((entry) => [entry.provider.id, entry]));
+  const candidates = [];
+
+  profiles.forEach((profile) => {
+    const health = healthByProviderId.get(profile.providerId);
+    if (!health) {
+      candidates.push(scoreAiRuntimeCandidate({ profile, provider: null, health: null, purpose }));
+      return;
+    }
+    candidates.push(scoreAiRuntimeCandidate({ profile, provider: health.provider, health, purpose }));
+  });
+
+  doctor.providers.forEach((health) => {
+    if (profiles.some((profile) => profile.providerId === health.provider.id && profile.purpose === purpose)) {
+      return;
+    }
+    candidates.push(scoreAiRuntimeCandidate({
+      profile: null,
+      provider: health.provider,
+      health,
+      purpose,
+    }));
+  });
+
+  const ranked = candidates
+    .sort((left, right) => right.score - left.score)
+    .slice(0, clampNumber(options.limit, 8, 1, 30));
+  const selected = ranked[0] || null;
+  return {
+    status: selected?.health?.status === "healthy" ? "ready" : "needs_setup",
+    purpose,
+    selected: compactAiRuntimeCandidate(selected),
+    candidates: ranked.map(compactAiRuntimeCandidate),
+    recommendations: buildAiPickerRecommendations(selected, doctor),
+    doctorStatus: doctor.status,
+    checkedAt: doctor.checkedAt,
+  };
+}
+
+function listAiRuntimeProfiles(filters = {}) {
+  const purpose = normalizeOptionalText(filters.purpose || "") || "";
+  const status = normalizeOptionalText(filters.status || "active") || "active";
+  const limit = clampNumber(filters.limit, 20, 1, 100);
+  const rows = db.prepare(`
+    SELECT *
+    FROM ai_runtime_profiles
+    WHERE (? = '' OR purpose = ?)
+      AND (? = '' OR status = ?)
+    ORDER BY
+      CASE purpose WHEN 'coding' THEN 0 WHEN 'chat' THEN 1 WHEN 'harness' THEN 2 ELSE 3 END,
+      updated_at DESC,
+      name ASC
+    LIMIT ?
+  `).all(purpose, purpose, status, status, limit);
+  return {
+    count: rows.length,
+    profiles: rows.map(fromAiRuntimeProfileRow),
+  };
+}
+
+function getAiRuntimeProfile(profileIdOrPurpose) {
+  const text = normalizeOptionalText(profileIdOrPurpose || "");
+  if (!text) {
+    const row = db.prepare(`
+      SELECT *
+      FROM ai_runtime_profiles
+      WHERE status = 'active'
+      ORDER BY CASE purpose WHEN 'coding' THEN 0 WHEN 'chat' THEN 1 WHEN 'harness' THEN 2 ELSE 3 END, updated_at DESC
+      LIMIT 1
+    `).get();
+    return row ? fromAiRuntimeProfileRow(row) : null;
+  }
+  const row = db.prepare(`
+    SELECT *
+    FROM ai_runtime_profiles
+    WHERE id = ? OR lower(name) = lower(?) OR purpose = ?
+    ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, updated_at DESC
+    LIMIT 1
+  `).get(text, text, text.toLowerCase());
+  return row ? fromAiRuntimeProfileRow(row) : null;
+}
+
+function upsertAiRuntimeProfile(payload = {}) {
+  const purpose = normalizeAiProfilePurpose(payload.purpose || payload.kind || "chat");
+  const name = normalizeOptionalText(payload.name) || `${purpose.toUpperCase()} Runtime`;
+  const id = normalizeOptionalText(payload.id) || `profile-${sanitizeId(`${purpose}-${name}`)}`;
+  const provider = payload.providerId || payload.provider ? getAiProvider(payload.providerId || payload.provider) : null;
+  const now = nowIso();
+  const existing = db.prepare("SELECT * FROM ai_runtime_profiles WHERE id = ?").get(id);
+  db.prepare(`
+    INSERT INTO ai_runtime_profiles (
+      id, name, purpose, provider_id, model, temperature, max_tokens,
+      context_policy, status, metadata_json, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      name = excluded.name,
+      purpose = excluded.purpose,
+      provider_id = excluded.provider_id,
+      model = excluded.model,
+      temperature = excluded.temperature,
+      max_tokens = excluded.max_tokens,
+      context_policy = excluded.context_policy,
+      status = excluded.status,
+      metadata_json = excluded.metadata_json,
+      updated_at = excluded.updated_at
+  `).run(
+    id,
+    name,
+    purpose,
+    provider?.id || normalizeOptionalText(payload.providerId || payload.provider || "") || null,
+    normalizeOptionalText(payload.model || "") || provider?.defaultModel || null,
+    payload.temperature === undefined ? existing?.temperature ?? null : Number(payload.temperature),
+    payload.maxTokens || payload.max_tokens
+      ? clampNumber(payload.maxTokens || payload.max_tokens, 768, 1, 16000)
+      : existing?.max_tokens ?? null,
+    normalizeAiContextPolicy(payload.contextPolicy || payload.context_policy || existing?.context_policy || "workspace-brain"),
+    normalizeAiProfileStatus(payload.status || existing?.status || "active"),
+    JSON.stringify(payload.metadata && typeof payload.metadata === "object" ? payload.metadata : parseJsonObject(existing?.metadata_json)),
+    existing?.created_at || now,
+    now
+  );
+  return getAiRuntimeProfile(id);
+}
+
+function listAiChatThreads(filters = {}) {
+  const workspacePath = normalizeWorkspacePath(filters.workspacePath || "");
+  const status = normalizeOptionalText(filters.status || "active") || "active";
+  const limit = clampNumber(filters.limit, 20, 1, 100);
+  const rows = db.prepare(`
+    SELECT *
+    FROM ai_chat_threads
+    WHERE (? = '' OR workspace_path = ?)
+      AND (? = '' OR status = ?)
+    ORDER BY datetime(updated_at) DESC
+    LIMIT ?
+  `).all(workspacePath, workspacePath, status, status, limit);
+  return {
+    count: rows.length,
+    threads: rows.map(fromAiChatThreadRow),
+  };
+}
+
+function getAiChatThread(threadId, options = {}) {
+  const id = normalizeOptionalText(threadId || "");
+  if (!id) {
+    return null;
+  }
+  const row = db.prepare("SELECT * FROM ai_chat_threads WHERE id = ?").get(id);
+  if (!row) {
+    return null;
+  }
+  const thread = fromAiChatThreadRow(row);
+  const limit = clampNumber(options.limit, 30, 1, 200);
+  const messages = db.prepare(`
+    SELECT *
+    FROM (
+      SELECT *
+      FROM ai_chat_messages
+      WHERE thread_id = ?
+      ORDER BY datetime(created_at) DESC
+      LIMIT ?
+    )
+    ORDER BY datetime(created_at) ASC
+  `).all(id, limit).map(fromAiChatMessageRow);
+  return { ...thread, messages };
+}
+
+function startAiChatThread(payload = {}) {
+  const workspacePath = normalizeWorkspacePath(payload.workspacePath || process.cwd());
+  if (!workspacePath) {
+    throw new Error("workspacePath la bat buoc.");
+  }
+  const profile = getAiRuntimeProfile(payload.profileId || payload.profile || payload.purpose || "chat");
+  const provider = getAiProvider(payload.providerId || payload.provider || profile?.providerId);
+  const model = normalizeOptionalText(payload.model || "") || profile?.model || provider?.defaultModel || null;
+  const title = normalizeOptionalText(payload.title || payload.query || payload.prompt || "")
+    || `AI chat ${path.basename(workspacePath)}`;
+  const now = nowIso();
+  const id = normalizeOptionalText(payload.id) || `ai-chat-${sanitizeId(`${workspacePath}-${title}-${now}`)}`;
+  db.prepare(`
+    INSERT INTO ai_chat_threads (
+      id, workspace_path, title, profile_id, provider_id, model, status, summary,
+      metadata_json, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      title = excluded.title,
+      profile_id = excluded.profile_id,
+      provider_id = excluded.provider_id,
+      model = excluded.model,
+      status = excluded.status,
+      summary = excluded.summary,
+      metadata_json = excluded.metadata_json,
+      updated_at = excluded.updated_at
+  `).run(
+    id,
+    workspacePath,
+    title.slice(0, 160),
+    profile?.id || null,
+    provider?.id || null,
+    model,
+    normalizeAiChatStatus(payload.status || "active"),
+    normalizeOptionalText(payload.summary || "") || "",
+    JSON.stringify(payload.metadata && typeof payload.metadata === "object" ? payload.metadata : {}),
+    now,
+    now
+  );
+  return getAiChatThread(id);
+}
+
+async function sendAiChatMessage(payload = {}) {
+  const message = normalizeOptionalText(payload.message || payload.query || payload.prompt || "");
+  if (!message) {
+    throw new Error("message/query la bat buoc.");
+  }
+  let thread = payload.threadId ? getAiChatThread(payload.threadId, { limit: payload.historyLimit }) : null;
+  if (!thread) {
+    thread = startAiChatThread(payload);
+  }
+  const shouldAutoPick =
+    payload.autoPick === true ||
+    payload.autoPick === "true" ||
+    (!payload.providerId && !payload.provider && !payload.model && !thread.providerId && !thread.model);
+  const runtimePick = shouldAutoPick
+    ? await pickAiRuntime({
+      purpose: payload.purpose || payload.profile || payload.profileId || "chat",
+      checkHealth: payload.pickCheckHealth === true || payload.pickCheckHealth === "true",
+      timeoutMs: payload.timeoutMs,
+    })
+    : null;
+  const profile = getAiRuntimeProfile(
+    payload.profileId ||
+    payload.profile ||
+    thread.profileId ||
+    runtimePick?.selected?.profileId ||
+    payload.purpose ||
+    "chat"
+  );
+  const provider = getAiProvider(
+    payload.providerId ||
+    payload.provider ||
+    runtimePick?.selected?.providerId ||
+    thread.providerId ||
+    profile?.providerId
+  );
+  if (!provider) {
+    throw new Error("Khong tim thay AI provider cho chat thread.");
+  }
+  const model = normalizeOptionalText(payload.model || "")
+    || runtimePick?.selected?.model
+    || thread.model
+    || profile?.model
+    || provider.defaultModel;
+  const previousMessages = getAiChatThread(thread.id, {
+    limit: clampNumber(payload.historyLimit, 12, 0, 40),
+  }).messages.map((entry) => ({
+    role: entry.role === "assistant" ? "assistant" : "user",
+    content: entry.content,
+  }));
+  const contextPolicy = normalizeAiContextPolicy(payload.contextPolicy || profile?.contextPolicy || "workspace-brain");
+  const chatPayload = {
+    provider: provider.id,
+    model,
+    workspacePath: contextPolicy === "none" ? "" : thread.workspacePath,
+    query: message,
+    messages: [...previousMessages, { role: "user", content: message }],
+    temperature: payload.temperature ?? profile?.temperature,
+    maxTokens: payload.maxTokens || payload.max_tokens || profile?.maxTokens,
+    timeoutMs: payload.timeoutMs,
+  };
+  const userMessage = insertAiChatMessage({
+    threadId: thread.id,
+    role: "user",
+    content: message,
+    metadata: {
+      profileId: profile?.id || null,
+      contextPolicy,
+      runtimePick: compactAiRuntimePickForStorage(runtimePick),
+    },
+  });
+  const result = await chatWithAiProvider(chatPayload);
+  const assistantMessage = insertAiChatMessage({
+    threadId: thread.id,
+    role: "assistant",
+    content: result.content || (result.error ? `Model call failed: ${result.error}` : ""),
+    runId: result.run?.id || null,
+    metadata: {
+      status: result.status,
+      providerId: provider.id,
+      model,
+      usage: result.usage,
+      error: result.error || null,
+      runtimePick: compactAiRuntimePickForStorage(runtimePick),
+    },
+  });
+  const summary = result.content
+    ? result.content.replace(/\s+/g, " ").slice(0, 240)
+    : `Last model call ${result.status}: ${result.error || "no content"}`;
+  db.prepare(`
+    UPDATE ai_chat_threads
+    SET provider_id = ?, model = ?, profile_id = ?, summary = ?, updated_at = ?
+    WHERE id = ?
+  `).run(provider.id, model, profile?.id || null, summary, nowIso(), thread.id);
+  return {
+    thread: getAiChatThread(thread.id, { limit: clampNumber(payload.returnLimit, 8, 1, 100) }),
+    userMessage,
+    assistantMessage,
+    run: compactAiModelRunForReturn(result.run),
+    provider,
+    profile,
+    runtimePick: compactAiRuntimePickForStorage(runtimePick),
+    status: result.status,
+    error: result.error,
+    usage: result.usage,
+  };
+}
+
 function getPipelineCache(rootPath, maxDepth = 6, maxFiles = 220) {
   const normalizedRootPath = path.normalize(String(rootPath || "").trim());
   if (!normalizedRootPath) {
@@ -1886,6 +3170,31 @@ function openStorageFolder(kind) {
   };
 }
 
+function openSystemPath(targetPath, options = {}) {
+  const normalizedPath = path.resolve(String(targetPath || "").trim());
+  if (!normalizedPath) {
+    throw new Error("targetPath la bat buoc.");
+  }
+  if (!fs.existsSync(normalizedPath)) {
+    throw new Error(`Khong tim thay duong dan: ${normalizedPath}`);
+  }
+
+  const mode = normalizeOptionalText(options.mode || "") || (fs.statSync(normalizedPath).isDirectory() ? "open" : "reveal");
+  const args = mode === "reveal" && !fs.statSync(normalizedPath).isDirectory()
+    ? [`/select,${normalizedPath}`]
+    : [normalizedPath];
+
+  spawn("explorer.exe", args, {
+    detached: true,
+    stdio: "ignore",
+  }).unref();
+
+  return {
+    mode,
+    openedPath: normalizedPath,
+  };
+}
+
 function insertNode(node, preferredSortOrder = null) {
   const now = nowIso();
   const sortOrderRow = db.prepare("SELECT MIN(sort_order) AS minSort FROM nodes").get();
@@ -2102,6 +3411,90 @@ function fromBrainSkillEventRow(row) {
     message: row.message,
     createdAt: row.created_at,
     payload: parseJsonObject(row.payload_json),
+  };
+}
+
+function fromAiProviderRow(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    kind: row.kind,
+    baseUrl: row.base_url,
+    apiKeyRef: row.api_key_ref || null,
+    defaultModel: row.default_model || null,
+    capabilities: parseJsonArray(row.capabilities_json),
+    metadata: parseJsonObject(row.metadata_json),
+    status: row.status || "unknown",
+    privacyLevel: row.privacy_level || "local",
+    lastHealthcheckAt: row.last_healthcheck_at || null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function fromAiModelRunRow(row) {
+  return {
+    id: row.id,
+    providerId: row.provider_id,
+    model: row.model,
+    runType: row.run_type,
+    status: row.status,
+    prompt: row.prompt || "",
+    responsePreview: row.response_preview || "",
+    latencyMs: Number(row.latency_ms || 0),
+    inputTokens: row.input_tokens === null || row.input_tokens === undefined ? null : Number(row.input_tokens),
+    outputTokens: row.output_tokens === null || row.output_tokens === undefined ? null : Number(row.output_tokens),
+    tokensPerSecond: row.tokens_per_second === null || row.tokens_per_second === undefined
+      ? null
+      : Number(row.tokens_per_second),
+    error: row.error || null,
+    metadata: parseJsonObject(row.metadata_json),
+    createdAt: row.created_at,
+  };
+}
+
+function fromAiRuntimeProfileRow(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    purpose: row.purpose,
+    providerId: row.provider_id || null,
+    model: row.model || null,
+    temperature: row.temperature === null || row.temperature === undefined ? null : Number(row.temperature),
+    maxTokens: row.max_tokens === null || row.max_tokens === undefined ? null : Number(row.max_tokens),
+    contextPolicy: row.context_policy || "workspace-brain",
+    status: row.status || "active",
+    metadata: parseJsonObject(row.metadata_json),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function fromAiChatThreadRow(row) {
+  return {
+    id: row.id,
+    workspacePath: row.workspace_path,
+    title: row.title,
+    profileId: row.profile_id || null,
+    providerId: row.provider_id || null,
+    model: row.model || null,
+    status: row.status || "active",
+    summary: row.summary || "",
+    metadata: parseJsonObject(row.metadata_json),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function fromAiChatMessageRow(row) {
+  return {
+    id: row.id,
+    threadId: row.thread_id,
+    role: row.role,
+    content: row.content,
+    runId: row.run_id || null,
+    metadata: parseJsonObject(row.metadata_json),
+    createdAt: row.created_at,
   };
 }
 
@@ -6552,6 +7945,1071 @@ function uniqueStrings(values) {
   return [...new Set(values.filter((value) => typeof value === "string" && value.trim()).map((value) => value.trim()))];
 }
 
+function normalizeAiProviderKind(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replaceAll("-", "_")
+    .replaceAll(".", "");
+  const aliases = {
+    openai: "openai_compatible",
+    openai_compat: "openai_compatible",
+    openaicompatible: "openai_compatible",
+    compatible: "openai_compatible",
+    llama_cpp: "llamacpp",
+    llamacpp: "llamacpp",
+    "llama.cpp": "llamacpp",
+    lm_studio: "lmstudio",
+    lmstudio: "lmstudio",
+    harness: "harness",
+  };
+  return aliases[normalized] || normalized;
+}
+
+function providerDefaultName(kind) {
+  const names = {
+    ollama: "Ollama Local",
+    llamacpp: "llama.cpp Local",
+    vllm: "vLLM Local",
+    lmstudio: "LM Studio Local",
+    harness: "Model Harness",
+    openai_compatible: "OpenAI Compatible Provider",
+  };
+  return names[kind] || `${kind || "AI"} Provider`;
+}
+
+function normalizeAiBaseUrl(value) {
+  const text = normalizeOptionalText(value);
+  if (!text) {
+    return "";
+  }
+  return text.replace(/\/+$/g, "");
+}
+
+function inferAiProviderCapabilities(kind, payload = {}) {
+  const base = ["chat", "local", "harness"];
+  const byKind = {
+    ollama: ["json", "embeddings"],
+    llamacpp: ["json", "embeddings", "rerank"],
+    vllm: ["json", "tools"],
+    lmstudio: ["json", "embeddings"],
+    harness: ["evaluation", "benchmark", "adapter"],
+    openai_compatible: ["json"],
+  };
+  const text = `${kind} ${payload.baseUrl || payload.base_url || ""} ${payload.name || ""}`.toLowerCase();
+  const inferred = [...base, ...(byKind[kind] || byKind.openai_compatible)];
+  if (text.includes("http://") && !text.includes("localhost") && !text.includes("127.0.0.1")) {
+    inferred.push("remote");
+  }
+  return uniqueStrings(inferred);
+}
+
+function normalizeAiPrivacyLevel(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["local", "lan", "cloud"].includes(normalized)) {
+    return normalized;
+  }
+  return "local";
+}
+
+function inferAiPrivacyLevel(baseUrl) {
+  try {
+    const parsed = new URL(baseUrl);
+    const host = parsed.hostname.toLowerCase();
+    if (["localhost", "127.0.0.1", "::1"].includes(host)) {
+      return "local";
+    }
+    if (
+      host.startsWith("10.") ||
+      host.startsWith("192.168.") ||
+      /^172\.(1[6-9]|2\d|3[0-1])\./.test(host)
+    ) {
+      return "lan";
+    }
+    return "cloud";
+  } catch {
+    return "local";
+  }
+}
+
+function buildAiHarnessMetadata(kind, baseUrl, model) {
+  return {
+    builtInSuites: ["smoke", "json", "latency", "harness"],
+    providerKind: kind,
+    model: normalizeOptionalText(model) || null,
+    external: {
+      eleutheraiLmEvaluationHarness: {
+        supported: true,
+        adapter: "openai-compatible",
+        baseUrl,
+        note: "Use this provider through an OpenAI-compatible adapter/proxy for benchmark-grade evals; Graph Memory stores lightweight local harness runs.",
+      },
+    },
+  };
+}
+
+function buildAiProviderUrl(baseUrl, route) {
+  return `${String(baseUrl || "").replace(/\/+$/g, "")}/${String(route || "").replace(/^\/+/g, "")}`;
+}
+
+function buildAiHeaders(provider) {
+  const headers = { "Content-Type": "application/json" };
+  const keyRef = normalizeOptionalText(provider?.apiKeyRef || provider?.api_key_ref || "");
+  if (!keyRef) {
+    return headers;
+  }
+  const envName = keyRef.startsWith("env:") ? keyRef.slice(4) : keyRef;
+  const resolved = process.env[envName] || (keyRef.includes("_API_KEY") ? "" : keyRef);
+  if (resolved) {
+    headers.Authorization = `Bearer ${resolved}`;
+  }
+  return headers;
+}
+
+function normalizeAiMessages(messages, fallbackQuery) {
+  const allowedRoles = new Set(["system", "user", "assistant", "tool"]);
+  if (Array.isArray(messages)) {
+    return messages
+      .map((message) => ({
+        role: allowedRoles.has(String(message?.role || "").toLowerCase())
+          ? String(message.role).toLowerCase()
+          : "user",
+        content: normalizeOptionalText(message?.content) || "",
+      }))
+      .filter((message) => message.content);
+  }
+  const query = normalizeOptionalText(fallbackQuery);
+  return query ? [{ role: "user", content: query }] : [];
+}
+
+function buildAiContextPack(options = {}) {
+  const workspacePath = normalizeWorkspacePath(options.workspacePath || "");
+  const query = normalizeOptionalText(options.query || options.prompt || "");
+  const brain = getBrainContext({
+    workspacePath,
+    query: query || undefined,
+    capability: options.capability,
+    file: options.file,
+    location: options.location,
+    skillLimit: clampNumber(options.skillLimit, 3, 1, 8),
+    moduleLimit: clampNumber(options.moduleLimit, 3, 1, 8),
+  });
+  const compact = {
+    workspacePath: brain.workspacePath,
+    query,
+    recentWork: brain.lowToken?.recentWork || null,
+    currentTask: brain.lowToken?.implementation?.primaryThread || null,
+    skills: (brain.skills || []).slice(0, 3).map((skill) => ({
+      id: skill.id,
+      name: skill.name,
+      summary: skill.summary,
+      capabilities: skill.capabilities,
+      usage: skill.usage,
+    })),
+    reusableModules: (brain.lowToken?.reusableModules || []).slice(0, 4).map((module) => ({
+      id: module.id,
+      name: module.name,
+      capability: module.capability,
+      copyability: module.copyability,
+      recommendedAction: module.recommendedAction,
+      sourcePath: module.sourcePath,
+    })),
+    recommendations: (brain.recommendations || []).slice(0, 6),
+  };
+  return {
+    compact,
+    tokenEstimate: estimateTextTokens(JSON.stringify(compact)),
+    systemPrompt: [
+      "You are running inside Graph Memory with compact project memory.",
+      "Prefer these facts over re-scanning the repository unless more detail is required.",
+      JSON.stringify(compact, null, 2),
+    ].join("\n"),
+  };
+}
+
+function compactAiContextPackForStorage(contextPack) {
+  if (!contextPack) {
+    return null;
+  }
+  return {
+    compact: contextPack.compact,
+    tokenEstimate: contextPack.tokenEstimate,
+  };
+}
+
+function compactAiModelRunForReturn(run) {
+  if (!run) {
+    return null;
+  }
+  return {
+    id: run.id,
+    providerId: run.providerId,
+    model: run.model,
+    runType: run.runType,
+    status: run.status,
+    latencyMs: run.latencyMs,
+    inputTokens: run.inputTokens,
+    outputTokens: run.outputTokens,
+    tokensPerSecond: run.tokensPerSecond,
+    error: run.error,
+    createdAt: run.createdAt,
+  };
+}
+
+function detectLocalAiCommands() {
+  const checks = [
+    {
+      id: "ollama",
+      command: "ollama",
+      args: ["--version"],
+      startHint: "ollama serve",
+      installHint: "Install Ollama, then run: ollama pull qwen2.5-coder",
+    },
+    {
+      id: "lmstudio",
+      command: "lms",
+      args: ["--version"],
+      startHint: "Start LM Studio Local Server on port 1234",
+      installHint: "Install LM Studio and enable the OpenAI-compatible local server.",
+    },
+    {
+      id: "python",
+      command: "python",
+      args: ["--version"],
+      startHint: "python -m vllm.entrypoints.openai.api_server --model <model>",
+      installHint: "Install Python runtime if you plan to run vLLM or lm-evaluation-harness.",
+    },
+    {
+      id: "lm_eval",
+      command: "python",
+      args: ["-m", "lm_eval", "--help"],
+      startHint: "python -m lm_eval --model local-chat-completions --tasks gsm8k --model_args model=<model>,base_url=http://localhost:11434/v1/chat/completions",
+      installHint: 'Install API backend: python -m pip install "lm_eval[api]"',
+    },
+  ];
+  return checks.map((check) => {
+    try {
+      const result = spawnSync(check.command, check.args, {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 3000,
+      });
+      return {
+        id: check.id,
+        command: check.command,
+        available: !result.error && result.status === 0,
+        version: String(result.stdout || result.stderr || "").trim().split(/\r?\n/)[0] || null,
+        startHint: check.startHint,
+        installHint: check.installHint,
+        error: result.error?.message || (result.status && result.status !== 0 ? String(result.stderr || "").trim() : null),
+      };
+    } catch (error) {
+      return {
+        id: check.id,
+        command: check.command,
+        available: false,
+        version: null,
+        startHint: check.startHint,
+        installHint: check.installHint,
+        error: error.message,
+      };
+    }
+  });
+}
+
+function buildAiDoctorRecommendations({ health, profiles, commands }) {
+  const recommendations = [];
+  const healthy = health.filter((entry) => entry.status === "healthy");
+  const ollamaCommand = commands.find((entry) => entry.id === "ollama");
+  const lmEvalCommand = commands.find((entry) => entry.id === "lm_eval");
+  if (!healthy.length) {
+    recommendations.push({
+      severity: "high",
+      title: "No healthy local AI provider detected",
+      action: ollamaCommand?.available
+        ? "Start Ollama and pull a model, then rerun ai-doctor."
+        : "Install/start one OpenAI-compatible local server: Ollama, LM Studio, vLLM, or llama.cpp.",
+      command: ollamaCommand?.available ? "ollama serve; ollama pull qwen2.5-coder" : "node graph-cli.js ai-providers",
+    });
+  }
+  health
+    .filter((entry) => entry.status === "healthy")
+    .forEach((entry) => {
+      if (entry.provider.defaultModel && entry.models.length && !entry.models.includes(entry.provider.defaultModel)) {
+        recommendations.push({
+          severity: "medium",
+          title: `${entry.provider.name} default model is not exposed`,
+          action: `Update provider/profile model to one of: ${entry.models.slice(0, 5).join(", ")}`,
+          command: `node graph-cli.js ai-profile-upsert --id profile-local-coding --provider ${entry.provider.id} --model ${entry.models[0]}`,
+        });
+      }
+    });
+  profiles
+    .filter((profile) => profile.status === "active")
+    .forEach((profile) => {
+      const providerHealth = health.find((entry) => entry.provider.id === profile.providerId);
+      if (!providerHealth) {
+        recommendations.push({
+          severity: "medium",
+          title: `${profile.name} points to missing provider`,
+          action: "Update this runtime profile to an existing local provider.",
+          command: `node graph-cli.js ai-profile-upsert --id ${profile.id} --provider provider-ollama-local`,
+        });
+      } else if (providerHealth.status !== "healthy") {
+        recommendations.push({
+          severity: "medium",
+          title: `${profile.name} provider is ${providerHealth.status}`,
+          action: `Start ${providerHealth.provider.name} or point ${profile.id} to a healthy provider.`,
+          command: `node graph-cli.js ai-healthcheck --provider ${providerHealth.provider.id}`,
+        });
+      }
+    });
+  if (profiles.some((profile) => profile.purpose === "harness") && !lmEvalCommand?.available) {
+    recommendations.push({
+      severity: "medium",
+      title: "External evaluation harness is not installed",
+      action: "Install lm-evaluation-harness API extras to enable benchmark runs and result import.",
+      command: 'python -m pip install "lm_eval[api]"',
+    });
+  }
+  if (healthy.length) {
+    const best = healthy[0];
+    recommendations.push({
+      severity: "low",
+      title: "At least one local provider is ready",
+      action: `Use ${best.provider.id} for local chat/coding profiles.`,
+      command: `node graph-cli.js ai-chat-send --workspacePath "<repo>" --profile profile-local-coding --message "Summarize next step"`,
+    });
+  }
+  return recommendations;
+}
+
+function scoreAiRuntimeCandidate({ profile, provider, health, purpose }) {
+  const model = profile?.model || provider?.defaultModel || health?.models?.[0] || null;
+  const reasons = [];
+  let score = 0;
+  if (profile?.purpose === purpose) {
+    score += 45;
+    reasons.push(`profile purpose matches ${purpose}`);
+  } else if (profile?.purpose === "chat" && purpose !== "harness") {
+    score += 12;
+    reasons.push("chat profile can be used as fallback");
+  } else if (!profile) {
+    score += 8;
+    reasons.push("provider fallback without profile");
+  }
+
+  const status = health?.status || provider?.status || "unknown";
+  if (status === "healthy") {
+    score += 100;
+    reasons.push("provider is healthy");
+  } else if (status === "unknown") {
+    score += 20;
+    reasons.push("provider health is unknown");
+  } else {
+    score -= 50;
+    reasons.push(`provider is ${status}`);
+  }
+
+  const exposedModels = health?.models || [];
+  if (model && exposedModels.includes(model)) {
+    score += 35;
+    reasons.push("selected model is exposed by provider");
+  } else if (exposedModels.length) {
+    score += 18;
+    reasons.push(`fallback model available: ${exposedModels[0]}`);
+  }
+
+  if (provider?.privacyLevel === "local") {
+    score += 10;
+    reasons.push("local privacy boundary");
+  }
+  if (provider?.kind === "ollama" && purpose === "coding") {
+    score += 8;
+    reasons.push("Ollama coding default");
+  }
+  if (provider?.kind === "harness" && purpose === "harness") {
+    score += 30;
+    reasons.push("harness provider for harness purpose");
+  }
+  if (health?.latencyMs !== null && health?.latencyMs !== undefined && health.status === "healthy") {
+    score += Math.max(0, 20 - Math.round(Number(health.latencyMs) / 100));
+    reasons.push(`latency ${health.latencyMs}ms`);
+  }
+
+  return {
+    score,
+    purpose,
+    profile,
+    provider,
+    health: health ? {
+      status: health.status,
+      models: health.models,
+      latencyMs: health.latencyMs,
+      error: health.error,
+    } : null,
+    model: exposedModels.includes(model) ? model : exposedModels[0] || model,
+    contextPolicy: profile?.contextPolicy || "workspace-brain",
+    reasons,
+  };
+}
+
+function buildAiPickerRecommendations(selected, doctor) {
+  if (!selected) {
+    return [{
+      severity: "high",
+      title: "No AI runtime candidate found",
+      action: "Register a local provider and runtime profile.",
+      command: "node graph-cli.js ai-provider-add ollama http://localhost:11434/v1 --model qwen2.5-coder",
+    }];
+  }
+  const recommendations = [];
+  if (selected.health?.status !== "healthy") {
+    recommendations.push({
+      severity: "high",
+      title: "Selected runtime is not healthy",
+      action: "Run ai-doctor after starting a local model server, or override provider/model manually.",
+      command: "node graph-cli.js ai-doctor --timeoutMs 1200",
+    });
+  }
+  if (selected.profile && selected.provider && selected.profile.providerId !== selected.provider.id) {
+    recommendations.push({
+      severity: "medium",
+      title: "Profile/provider mismatch",
+      action: `Update ${selected.profile.id} to provider ${selected.provider.id}.`,
+      command: `node graph-cli.js ai-profile-upsert --id ${selected.profile.id} --provider ${selected.provider.id} --model ${selected.model}`,
+    });
+  }
+  return recommendations.length ? recommendations : [{
+    severity: "low",
+    title: "Runtime selected",
+    action: `Use ${selected.provider?.id || "provider"} with model ${selected.model || "default"}.`,
+    command: `node graph-cli.js ai-chat-send --autoPick true --purpose ${selected.purpose} --message "Hello"`,
+  }];
+}
+
+function compactAiRuntimeCandidate(candidate) {
+  if (!candidate) {
+    return null;
+  }
+  return {
+    score: candidate.score,
+    purpose: candidate.purpose,
+    profileId: candidate.profile?.id || null,
+    profileName: candidate.profile?.name || null,
+    providerId: candidate.provider?.id || null,
+    providerName: candidate.provider?.name || null,
+    providerKind: candidate.provider?.kind || null,
+    providerStatus: candidate.health?.status || candidate.provider?.status || null,
+    model: candidate.model || null,
+    contextPolicy: candidate.contextPolicy,
+    models: (candidate.health?.models || []).slice(0, 8),
+    latencyMs: candidate.health?.latencyMs ?? null,
+    error: candidate.health?.error || null,
+    reasons: candidate.reasons,
+  };
+}
+
+function compactAiRuntimePickForStorage(pick) {
+  if (!pick?.selected) {
+    return null;
+  }
+  return {
+    status: pick.status,
+    purpose: pick.purpose,
+    providerId: pick.selected.providerId || pick.selected.provider?.id || null,
+    profileId: pick.selected.profileId || pick.selected.profile?.id || null,
+    model: pick.selected.model || null,
+    score: pick.selected.score,
+    reasons: pick.selected.reasons,
+  };
+}
+
+function buildLocalAiRoadmapTasks() {
+  return [
+    {
+      id: "local-ai-doctor",
+      status: "done",
+      title: "Local AI setup doctor/autodetect",
+    },
+    {
+      id: "model-picker",
+      status: "done",
+      title: "Automatic provider/model picker from health, latency, and profile purpose",
+    },
+    {
+      id: "chat-ui-panel",
+      status: "done",
+      title: "Web UI panel for workspace internal AI chat threads",
+    },
+    {
+      id: "harness-adapter",
+      status: "done",
+      title: "External lm-evaluation-harness runner and result import",
+    },
+    {
+      id: "crawler-agent-flow",
+      status: "done",
+      title: "Crawler/deployer workflow hooks that request profile + compact memory before execution",
+    },
+    {
+      id: "workflow-ui-bridge",
+      status: "done",
+      title: "Workflow pack surfaced in web UI and recent activity handoff summaries",
+    },
+  ];
+}
+
+async function callOpenAiCompatibleChat(provider, options = {}) {
+  const model = normalizeOptionalText(options.model) || provider.defaultModel;
+  const messages = normalizeAiMessages(options.messages, "");
+  if (!model) {
+    throw new Error("model la bat buoc.");
+  }
+  if (!messages.length) {
+    throw new Error("messages la bat buoc.");
+  }
+  const body = {
+    model,
+    messages,
+    temperature: options.temperature === undefined ? 0.2 : Number(options.temperature),
+  };
+  const maxTokens = options.maxTokens ?? options.max_tokens;
+  if (maxTokens !== undefined && maxTokens !== null && String(maxTokens).trim() !== "") {
+    body.max_tokens = clampNumber(maxTokens, 512, 1, 8192);
+  }
+  const response = await fetch(buildAiProviderUrl(provider.baseUrl, "/chat/completions"), {
+    method: "POST",
+    headers: buildAiHeaders(provider),
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(clampNumber(options.timeoutMs, 30000, 1000, 300000)),
+  });
+  const text = await response.text();
+  let json = {};
+  try {
+    json = text ? JSON.parse(text) : {};
+  } catch {
+    json = {};
+  }
+  if (!response.ok) {
+    throw new Error(json.error?.message || text.slice(0, 300) || `chat endpoint returned ${response.status}`);
+  }
+  const choice = Array.isArray(json.choices) ? json.choices[0] : null;
+  return {
+    content: choice?.message?.content || choice?.text || "",
+    finishReason: choice?.finish_reason || null,
+    usage: json.usage || {},
+    raw: json,
+  };
+}
+
+function estimateTextTokens(text) {
+  return Math.ceil(String(text || "").length / 4);
+}
+
+function insertAiModelRun(payload = {}) {
+  const now = nowIso();
+  const id = normalizeOptionalText(payload.id)
+    || `ai-run-${sanitizeId(`${payload.providerId || "provider"}-${payload.runType || "run"}-${now}`)}-${crypto.randomBytes(3).toString("hex")}`;
+  db.prepare(`
+    INSERT INTO ai_model_runs (
+      id, provider_id, model, run_type, status, prompt, response_preview,
+      latency_ms, input_tokens, output_tokens, tokens_per_second, error,
+      metadata_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    payload.providerId,
+    payload.model || "unknown",
+    payload.runType || "run",
+    payload.status || "completed",
+    payload.prompt || "",
+    payload.responsePreview || "",
+    Number(payload.latencyMs || 0),
+    payload.inputTokens ?? null,
+    payload.outputTokens ?? null,
+    payload.tokensPerSecond ?? null,
+    payload.error || null,
+    JSON.stringify(payload.metadata || {}),
+    now
+  );
+  return fromAiModelRunRow(db.prepare("SELECT * FROM ai_model_runs WHERE id = ?").get(id));
+}
+
+function buildAiHarnessPrompts(suite, payload = {}) {
+  const customPrompt = normalizeOptionalText(payload.prompt || payload.query || "");
+  if (customPrompt) {
+    return [{
+      name: "custom",
+      prompt: customPrompt,
+      maxTokens: clampNumber(payload.maxTokens || payload.max_tokens, 128, 8, 2048),
+    }];
+  }
+  const suites = {
+    smoke: [
+      {
+        name: "identity",
+        prompt: "Reply with one short sentence confirming the local model is reachable.",
+        maxTokens: 64,
+      },
+    ],
+    json: [
+      {
+        name: "json-shape",
+        prompt: 'Return only valid JSON with keys "status" and "next_step". Use status "ok".',
+        expectIncludes: '"status"',
+        maxTokens: 96,
+      },
+    ],
+    latency: [
+      {
+        name: "small-generation",
+        prompt: "Summarize why local AI models are useful for private coding workflows in 3 bullets.",
+        maxTokens: 160,
+      },
+      {
+        name: "code-reasoning",
+        prompt: "Given a failing API healthcheck, list 3 practical debugging steps.",
+        maxTokens: 160,
+      },
+    ],
+    harness: [
+      {
+        name: "instruction-following",
+        prompt: "Answer exactly: GRAPH_MEMORY_HARNESS_OK",
+        expectIncludes: "GRAPH_MEMORY_HARNESS_OK",
+        maxTokens: 32,
+      },
+      {
+        name: "json-contract",
+        prompt: 'Return only JSON: {"harness":"ok","copyable":true}',
+        expectIncludes: '"harness"',
+        maxTokens: 64,
+      },
+    ],
+  };
+  return suites[normalizeOptionalText(suite) || "smoke"] || suites.smoke;
+}
+
+function buildExternalHarnessHint(provider, model, suite, options = {}) {
+  return {
+    name: "EleutherAI lm-evaluation-harness",
+    supportedVia: "OpenAI-compatible provider or adapter",
+    providerId: provider.id,
+    providerKind: provider.kind,
+    providerBaseUrl: provider.baseUrl,
+    model,
+    suite,
+    mode: normalizeAiHarnessMode(options.mode || "builtin"),
+    adapterAvailable: options.adapterAvailable === true,
+    tasks: Array.isArray(options.tasks) ? options.tasks : [],
+    command: normalizeOptionalText(options.command) || null,
+    outputPath: normalizeOptionalText(options.outputPath) || null,
+    installCommand: 'python -m pip install "lm_eval[api]"',
+    note: "Use external harness for standardized benchmarks; use Graph Memory built-in harness for quick reachability, latency, and integration memory.",
+  };
+}
+
+function buildWorkflowPreparationSummary({ purpose, runtimePick, lowToken, implementation, topSkill }) {
+  const fragments = [];
+  if (purpose) {
+    fragments.push(`Purpose ${purpose}`);
+  }
+  if (runtimePick?.selected?.profileName || runtimePick?.selected?.providerId) {
+    fragments.push(
+      `runtime ${runtimePick.selected.profileName || runtimePick.selected.providerId} / ${runtimePick.selected.model || "default"}`
+    );
+  }
+  if (implementation?.nextStep || implementation?.currentStep) {
+    fragments.push(`resume ${implementation.nextStep || implementation.currentStep}`);
+  }
+  if (topSkill?.name) {
+    fragments.push(`skill ${topSkill.name}`);
+  }
+  if (lowToken?.projectMatches?.[0]?.name) {
+    fragments.push(`reuse ${lowToken.projectMatches[0].name}`);
+  }
+  if (lowToken?.debugContext?.recommendedFiles?.[0]?.filePath) {
+    fragments.push(`open ${compactWorkflowPath(lowToken.debugContext.recommendedFiles[0].filePath)}`);
+  }
+  return fragments.join(" · ") || "Workflow prepared.";
+}
+
+function compactWorkflowPath(filePath) {
+  const normalized = String(filePath || "").replaceAll("\\", "/");
+  const segments = normalized.split("/").filter(Boolean);
+  if (segments.length <= 3) {
+    return normalized;
+  }
+  return `.../${segments.slice(-3).join("/")}`;
+}
+
+function normalizeAiHarnessMode(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["auto", "builtin", "external", "import"].includes(normalized)) {
+    return normalized;
+  }
+  return "auto";
+}
+
+function detectLmEvaluationHarness() {
+  try {
+    const result = spawnSync("python", ["-m", "lm_eval", "--help"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 4000,
+    });
+    return {
+      available: !result.error && result.status === 0,
+      command: "python",
+      runner: "-m lm_eval",
+      version: String(result.stdout || result.stderr || "").trim().split(/\r?\n/)[0] || null,
+      error: result.error?.message || (result.status !== 0 ? String(result.stderr || "").trim() || "lm_eval unavailable" : null),
+    };
+  } catch (error) {
+    return {
+      available: false,
+      command: "python",
+      runner: "-m lm_eval",
+      version: null,
+      error: error.message,
+    };
+  }
+}
+
+function resolveAiHarnessTasks(payload = {}, suite = "smoke") {
+  const direct = normalizeOptionalText(payload.tasks || payload.task || payload.taskName || "");
+  if (direct) {
+    return [...new Set(direct.split(",").map((item) => item.trim()).filter(Boolean))];
+  }
+  const bySuite = {
+    smoke: ["gsm8k"],
+    json: ["truthfulqa_gen"],
+    latency: ["gsm8k"],
+    harness: ["gsm8k", "truthfulqa_gen"],
+  };
+  return bySuite[normalizeOptionalText(suite) || "smoke"] || bySuite.smoke;
+}
+
+function resolveAiHarnessApiMode(payload = {}, suite = "smoke") {
+  const explicit = normalizeOptionalText(payload.apiMode || payload.api || payload.modelType || "");
+  if (["chat", "chat-completions", "local-chat-completions"].includes(explicit)) {
+    return "chat";
+  }
+  if (["completions", "completion", "local-completions"].includes(explicit)) {
+    return "completions";
+  }
+  if (payload.applyChatTemplate === true || payload.applyChatTemplate === "true") {
+    return "chat";
+  }
+  return suite === "harness" || suite === "json" ? "chat" : "completions";
+}
+
+function resolveAiHarnessBaseUrl(provider, apiMode) {
+  const baseUrl = normalizeAiBaseUrl(provider?.baseUrl || "");
+  if (!baseUrl) {
+    return "";
+  }
+  if (/\/(chat\/completions|completions)$/i.test(baseUrl)) {
+    return baseUrl;
+  }
+  return `${baseUrl}/${apiMode === "chat" ? "chat/completions" : "completions"}`;
+}
+
+function buildExternalAiHarnessExecution({ provider, model, suite, tasks, payload = {} }) {
+  const apiMode = resolveAiHarnessApiMode(payload, suite);
+  const modelType = apiMode === "chat" ? "local-chat-completions" : "local-completions";
+  const outputPath = normalizeOptionalText(payload.outputPath)
+    || path.join(
+      STORAGE_HOME,
+      "harness-runs",
+      `${timestampForFile()}-${sanitizeId(`${provider.id}-${model}-${suite}`)}`
+    );
+  fs.mkdirSync(outputPath, { recursive: true });
+
+  const modelArgs = [
+    `model=${model}`,
+    `base_url=${resolveAiHarnessBaseUrl(provider, apiMode)}`,
+    `num_concurrent=${clampNumber(payload.numConcurrent, 1, 1, 16)}`,
+    `max_retries=${clampNumber(payload.maxRetries, 2, 0, 10)}`,
+    `tokenized_requests=${payload.tokenizedRequests === true || payload.tokenizedRequests === "true" ? "True" : "False"}`,
+  ];
+  const tokenizer = normalizeOptionalText(payload.tokenizer || "");
+  const tokenizerBackend = normalizeOptionalText(payload.tokenizerBackend || "");
+  if (tokenizer) {
+    modelArgs.push(`tokenizer=${tokenizer}`);
+  }
+  if (tokenizerBackend) {
+    modelArgs.push(`tokenizer_backend=${tokenizerBackend}`);
+  }
+  if (payload.maxLength) {
+    modelArgs.push(`max_length=${clampNumber(payload.maxLength, 4096, 128, 32768)}`);
+  }
+
+  const args = [
+    "-m",
+    "lm_eval",
+    "--model",
+    modelType,
+    "--tasks",
+    tasks.join(","),
+    "--model_args",
+    modelArgs.join(","),
+    "--output_path",
+    outputPath,
+    "--limit",
+    String(clampNumber(payload.limit, 10, 1, 200)),
+    "--num_fewshot",
+    String(clampNumber(payload.fewshot || payload.numFewshot, 0, 0, 10)),
+    "--batch_size",
+    String(payload.batchSize || 1),
+  ];
+  if (apiMode === "chat" || payload.applyChatTemplate === true || payload.applyChatTemplate === "true") {
+    args.push("--apply_chat_template");
+  }
+  if (payload.logSamples === true || payload.logSamples === "true") {
+    args.push("--log_samples");
+  }
+  if (payload.predictOnly === true || payload.predictOnly === "true") {
+    args.push("--predict_only");
+  }
+
+  return {
+    apiMode,
+    modelType,
+    tasks,
+    outputPath,
+    args,
+  };
+}
+
+function parseAiHarnessResultImport(importPath) {
+  const resolvedPath = resolveAiHarnessImportJsonPath(importPath);
+  const raw = fs.readFileSync(resolvedPath, "utf8");
+  const parsed = JSON.parse(raw);
+  const results = parsed?.results && typeof parsed.results === "object" ? parsed.results : parsed;
+  return {
+    resolvedPath,
+    raw: parsed,
+    results,
+  };
+}
+
+function resolveAiHarnessImportJsonPath(importPath) {
+  const normalized = path.resolve(cleanWindowsPath(importPath));
+  if (!fs.existsSync(normalized)) {
+    throw new Error(`Import path does not exist: ${normalized}`);
+  }
+  const stat = fs.statSync(normalized);
+  if (stat.isFile()) {
+    return normalized;
+  }
+  const candidates = [];
+  walkJsonFiles(normalized, candidates, 0);
+  const picked = candidates
+    .sort((left, right) => right.mtimeMs - left.mtimeMs)
+    .find((entry) => {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(entry.path, "utf8"));
+        return Boolean(parsed?.results && typeof parsed.results === "object");
+      } catch {
+        return false;
+      }
+    });
+  if (!picked) {
+    throw new Error(`No lm_eval results JSON found in ${normalized}`);
+  }
+  return picked.path;
+}
+
+function walkJsonFiles(rootPath, bucket, depth) {
+  if (depth > 4 || bucket.length > 40) {
+    return;
+  }
+  fs.readdirSync(rootPath, { withFileTypes: true }).forEach((entry) => {
+    const fullPath = path.join(rootPath, entry.name);
+    if (entry.isDirectory()) {
+      walkJsonFiles(fullPath, bucket, depth + 1);
+      return;
+    }
+    if (entry.isFile() && entry.name.toLowerCase().endsWith(".json")) {
+      const stat = fs.statSync(fullPath);
+      bucket.push({ path: fullPath, mtimeMs: stat.mtimeMs });
+    }
+  });
+}
+
+function summarizeImportedAiHarnessResult(parsed, options = {}) {
+  const taskMetrics = Object.entries(parsed.results || {}).map(([taskName, metricMap]) => {
+    const numericMetrics = Object.entries(metricMap || {})
+      .map(([key, value]) => ({
+        key,
+        value: typeof value === "number" ? value : (value && typeof value === "object" && typeof value.value === "number" ? value.value : null),
+      }))
+      .filter((entry) => Number.isFinite(entry.value));
+    const primary = numericMetrics.find((entry) => /^(acc_norm|acc|exact_match|f1|mc2|mc1|bleu|chrf)$/i.test(entry.key))
+      || numericMetrics[0]
+      || null;
+    return {
+      taskName,
+      primaryMetric: primary?.key || null,
+      score: primary?.value ?? null,
+      metrics: numericMetrics,
+    };
+  });
+
+  const passedThreshold = options.passedThreshold ?? 0.5;
+  const passed = taskMetrics.filter((entry) => entry.score !== null && entry.score >= passedThreshold);
+  const failed = taskMetrics.filter((entry) => entry.score !== null && entry.score < passedThreshold);
+  const noScore = taskMetrics.filter((entry) => entry.score === null);
+  const aggregateScore = taskMetrics.filter((entry) => entry.score !== null).length
+    ? Number(
+        (
+          taskMetrics
+            .filter((entry) => entry.score !== null)
+            .reduce((sum, entry) => sum + Number(entry.score), 0) /
+          taskMetrics.filter((entry) => entry.score !== null).length
+        ).toFixed(4)
+      )
+    : null;
+  const status = options.executionStatus === "failed"
+    ? "failed"
+    : failed.length
+      ? (passed.length ? "warning" : "failed")
+      : "completed";
+  const summary = [
+    `External harness ${status} for ${options.provider?.name || "provider"} / ${options.model || "model"}.`,
+    taskMetrics.length ? `Tasks: ${taskMetrics.map((entry) => entry.taskName).join(", ")}.` : "",
+    aggregateScore !== null ? `Average score: ${aggregateScore}.` : "",
+  ].filter(Boolean).join(" ");
+  return {
+    status,
+    tasks: taskMetrics.map((entry) => entry.taskName),
+    taskMetrics,
+    totalCount: taskMetrics.length,
+    passedCount: passed.length,
+    failedCount: failed.length,
+    noScoreCount: noScore.length,
+    aggregateScore,
+    latencyMs: Number(options.executionLatencyMs || 0),
+    summary,
+    error: options.executionStatus === "failed"
+      ? normalizeOptionalText(options.executionStderr || options.executionStdout || "") || "lm_eval returned non-zero exit status"
+      : null,
+  };
+}
+
+function maybePersistAiHarnessVerification(payload = {}) {
+  if (!payload.moduleId && !payload.moduleCanonicalKey && !payload.moduleName) {
+    return null;
+  }
+  const targetWorkspacePath = normalizeWorkspacePath(payload.targetWorkspacePath || payload.workspacePath || "");
+  if (!targetWorkspacePath) {
+    return null;
+  }
+  const aggregate = payload.aggregate;
+  const passedTests = aggregate.taskMetrics
+    .filter((entry) => entry.score !== null && entry.score >= 0.5)
+    .map((entry) => `${entry.taskName}:${entry.primaryMetric || "score"}=${entry.score}`);
+  const failedTests = aggregate.taskMetrics
+    .filter((entry) => entry.score !== null && entry.score < 0.5)
+    .map((entry) => `${entry.taskName}:${entry.primaryMetric || "score"}=${entry.score}`);
+  const verificationNotes = [
+    `Harness mode: ${payload.executionStatus ? "external" : "import"}`,
+    `Provider: ${payload.provider.id}`,
+    `Model: ${payload.model}`,
+    `Suite: ${payload.suite}`,
+    payload.importPath ? `Import path: ${payload.importPath}` : "",
+  ].filter(Boolean);
+  return recordModuleVerification({
+    ...payload,
+    targetWorkspacePath,
+    workspacePath: targetWorkspacePath,
+    runId: payload.run?.id,
+    toolSource: payload.toolSource || "codex",
+    verificationKey: payload.verificationKey || deriveTaskKeyFromText(`harness-${payload.suite}-${payload.provider.id}-${payload.model}`, "module-verification"),
+    summary: payload.summary || aggregate.summary,
+    status: aggregate.passedCount && !aggregate.failedCount ? "passed" : aggregate.failedCount ? "mixed" : "pending",
+    passedTests,
+    failedTests,
+    integrationErrors: aggregate.error ? [aggregate.error] : [],
+    fixPatterns: [],
+    verificationNotes,
+    evidence: {
+      harness: {
+        providerId: payload.provider.id,
+        providerKind: payload.provider.kind,
+        model: payload.model,
+        suite: payload.suite,
+        importPath: payload.importPath || null,
+        taskMetrics: aggregate.taskMetrics,
+        aggregateScore: aggregate.aggregateScore,
+      },
+    },
+    eventKind: "harness-imported",
+    message: aggregate.summary,
+  });
+}
+
+function normalizeAiProfilePurpose(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["chat", "coding", "harness", "crawl", "deploy", "review"].includes(normalized)) {
+    return normalized;
+  }
+  return "chat";
+}
+
+function normalizeAiContextPolicy(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["none", "workspace-brain", "low-token", "full-thread"].includes(normalized)) {
+    return normalized;
+  }
+  return "workspace-brain";
+}
+
+function normalizeAiProfileStatus(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["active", "paused", "archived"].includes(normalized)) {
+    return normalized;
+  }
+  return "active";
+}
+
+function normalizeAiChatStatus(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["active", "paused", "completed", "archived"].includes(normalized)) {
+    return normalized;
+  }
+  return "active";
+}
+
+function insertAiChatMessage(payload = {}) {
+  const threadId = normalizeOptionalText(payload.threadId || "");
+  const content = normalizeOptionalText(payload.content || "");
+  if (!threadId || !content) {
+    throw new Error("threadId va content la bat buoc.");
+  }
+  const now = nowIso();
+  const id = normalizeOptionalText(payload.id)
+    || `ai-msg-${sanitizeId(`${threadId}-${payload.role || "message"}-${now}`)}-${crypto.randomBytes(3).toString("hex")}`;
+  db.prepare(`
+    INSERT INTO ai_chat_messages (
+      id, thread_id, role, content, run_id, metadata_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    threadId,
+    ["system", "user", "assistant", "tool"].includes(String(payload.role || "").toLowerCase())
+      ? String(payload.role).toLowerCase()
+      : "user",
+    content,
+    normalizeOptionalText(payload.runId || "") || null,
+    JSON.stringify(payload.metadata && typeof payload.metadata === "object" ? payload.metadata : {}),
+    now
+  );
+  return fromAiChatMessageRow(db.prepare("SELECT * FROM ai_chat_messages WHERE id = ?").get(id));
+}
+
 function writeUtf8FileIfMissing(filePath, content) {
   if (fs.existsSync(filePath)) {
     return;
@@ -8255,6 +10713,7 @@ module.exports = {
   getBrainContext,
   getBrainSkill,
   getImplementationContext,
+  prepareWorkflowExecution,
   getActivityRun,
   getContextWindow,
   getDebugContext,
@@ -8289,6 +10748,7 @@ module.exports = {
   registerBrainSkill,
   registerReusableModule,
   openStorageFolder,
+  openSystemPath,
   repairGraphTopology,
   restoreLatestBackup,
   mergeCrawledNodes,
@@ -8302,6 +10762,22 @@ module.exports = {
   updateBrainSkillFromGit,
   savePipelineCache,
   findReusableModules,
+  getAiProvider,
+  listAiProviders,
+  registerAiProvider,
+  healthcheckAiProvider,
+  chatWithAiProvider,
+  runAiHarness,
+  listAiModelRuns,
+  runAiSetupDoctor,
+  pickAiRuntime,
+  listAiRuntimeProfiles,
+  getAiRuntimeProfile,
+  upsertAiRuntimeProfile,
+  listAiChatThreads,
+  getAiChatThread,
+  startAiChatThread,
+  sendAiChatMessage,
   traceNodes,
   traceExecution,
   upsertImplementationThread,

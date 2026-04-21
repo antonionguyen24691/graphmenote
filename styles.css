@@ -3114,11 +3114,254 @@ textarea {
   color: #58657b;
 }
 
+.workflow-pack-card {
+  background:
+    radial-gradient(circle at 88% 14%, rgba(91, 141, 239, 0.14), transparent 28%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(244, 247, 255, 0.96)),
+    var(--surface);
+}
+
+.workflow-purpose-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.workflow-purpose-chip {
+  border: 1px solid rgba(120, 133, 161, 0.24);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--text-soft);
+  padding: 8px 12px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  cursor: pointer;
+  transition: transform 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+
+.workflow-purpose-chip:hover {
+  transform: translateY(-1px);
+  border-color: rgba(91, 141, 239, 0.32);
+}
+
+.workflow-purpose-chip.is-active {
+  border-color: rgba(91, 141, 239, 0.42);
+  background: rgba(91, 141, 239, 0.12);
+  color: #355ca8;
+}
+
+.workflow-pack-status {
+  margin: 12px 0 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.command-item--workflow {
+  border-color: rgba(91, 141, 239, 0.22);
+  background:
+    linear-gradient(135deg, rgba(242, 247, 255, 0.92), rgba(255, 255, 255, 0.8)),
+    rgba(255, 255, 255, 0.84);
+}
+
+.workflow-pack-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.workflow-handoff-box {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+  border-radius: 16px;
+  border: 1px dashed rgba(91, 141, 239, 0.3);
+  background: rgba(234, 242, 255, 0.68);
+  padding: 12px;
+}
+
+.workflow-handoff-box span {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.workflow-handoff-box strong {
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+.workflow-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.workflow-action-button {
+  border: 1px solid rgba(91, 141, 239, 0.24);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.88);
+  color: #355ca8;
+  padding: 10px 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+
+.workflow-action-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: rgba(91, 141, 239, 0.42);
+  background: rgba(234, 242, 255, 0.88);
+}
+
+.workflow-action-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.workflow-mini-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.workflow-mini-list span {
+  display: block;
+  border-radius: 14px;
+  background: rgba(29, 31, 29, 0.05);
+  padding: 10px 12px;
+  color: var(--text-soft);
+  line-height: 1.42;
+}
+
+.ai-runtime-card {
+  background:
+    radial-gradient(circle at 12% 10%, rgba(74, 216, 151, 0.15), transparent 32%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(246, 248, 242, 0.96)),
+    var(--surface);
+}
+
+.command-item--ai-runtime {
+  border-color: rgba(74, 216, 151, 0.28);
+  background:
+    linear-gradient(135deg, rgba(236, 255, 246, 0.92), rgba(255, 255, 255, 0.78)),
+    rgba(255, 255, 255, 0.84);
+}
+
+.ai-runtime-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.ai-runtime-recommendation {
+  margin-top: 14px;
+  border-radius: 16px;
+  border: 1px dashed rgba(198, 93, 46, 0.32);
+  background: rgba(255, 248, 235, 0.68);
+  padding: 12px;
+}
+
+.ai-runtime-recommendation p {
+  margin: 6px 0 0;
+}
+
+.ai-runtime-recommendation code {
+  display: block;
+  margin-top: 10px;
+  overflow-x: auto;
+  border-radius: 12px;
+  background: rgba(29, 31, 29, 0.08);
+  padding: 9px 10px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.ai-runtime-candidates,
+.ai-thread-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.ai-runtime-candidates span,
+.ai-thread-list span {
+  display: grid;
+  gap: 3px;
+  border-radius: 14px;
+  background: rgba(29, 31, 29, 0.05);
+  padding: 10px 12px;
+  color: var(--text-soft);
+  line-height: 1.4;
+}
+
+.ai-thread-list small,
+.ai-thread-list em {
+  color: var(--muted);
+  font-style: normal;
+}
+
+.ai-chat-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.ai-chat-form input {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.82);
+  padding: 12px 14px;
+  outline: none;
+}
+
+.ai-chat-form input:focus {
+  border-color: rgba(74, 216, 151, 0.8);
+  box-shadow: 0 0 0 4px rgba(74, 216, 151, 0.14);
+}
+
+.ai-chat-form button {
+  border: 0;
+  border-radius: 16px;
+  background: #1f6f53;
+  color: #fff;
+  padding: 0 18px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.ai-chat-form button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.ai-chat-status {
+  margin: 10px 0 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.activity-workflow-label,
+.activity-workflow-hint {
+  display: block;
+  margin-top: 6px;
+}
+
 /* ── Pipeline Responsive ────────────────────────────────────── */
 
 @media (max-width: 1080px) {
   .command-spotlights,
-  .command-grid {
+  .command-grid,
+  .workflow-pack-summary,
+  .ai-runtime-summary {
     grid-template-columns: 1fr;
   }
 
@@ -3143,6 +3386,14 @@ textarea {
 
   .pipeline-scan-form {
     flex-direction: column;
+  }
+
+  .ai-chat-form {
+    grid-template-columns: 1fr;
+  }
+
+  .ai-chat-form button {
+    min-height: 44px;
   }
 
   .pipeline-viewport {

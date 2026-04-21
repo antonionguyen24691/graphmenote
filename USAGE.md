@@ -503,3 +503,91 @@ MCP tools tuong ung:
 - `list_brain_skills`
 - `register_local_brain_skill`
 - `update_brain_skill_from_git`
+
+## 17. Local AI model + Harness
+
+Graph Memory co gateway cho local AI model va model harness. Cac provider mac dinh:
+
+- Ollama: `http://localhost:11434/v1`
+- llama.cpp server: `http://localhost:8080/v1`
+- vLLM: `http://localhost:8000/v1`
+
+Xem provider:
+
+```bash
+node graph-cli.js ai-providers
+```
+
+Dang ky provider moi, gom ca Harness/OpenAI-compatible adapter:
+
+```bash
+node graph-cli.js ai-provider-add harness http://localhost:9000/v1 --name "Local Harness" --model local-model --capabilities chat,harness,evaluation
+node graph-cli.js ai-provider-add ollama http://localhost:11434/v1 --model qwen2.5-coder --capabilities chat,json,harness
+```
+
+Kiem tra model endpoint:
+
+```bash
+node graph-cli.js ai-healthcheck --provider provider-ollama-local
+node graph-cli.js ai-doctor --timeoutMs 1200
+node graph-cli.js ai-pick --purpose coding --checkHealth false
+```
+
+Chat noi bo co chen compact memory cua workspace:
+
+```bash
+node graph-cli.js ai-chat --provider provider-ollama-local --model qwen2.5-coder --workspacePath "C:\repo\stock" --query "Tom tat viec dang lam va buoc tiep theo"
+```
+
+Chay harness nhe de luu chat/latency/contract memory:
+
+```bash
+node graph-cli.js ai-harness-run --provider provider-ollama-local --suite harness
+node graph-cli.js ai-model-runs --limit 10
+```
+
+MCP tools tuong ung:
+
+- `list_ai_providers`
+- `register_ai_provider`
+- `healthcheck_ai_provider`
+- `chat_with_ai_provider`
+- `run_ai_harness`
+- `list_ai_model_runs`
+- `ai_setup_doctor`
+- `pick_ai_runtime`
+
+Built-in harness dung cho smoke test nhanh, JSON contract va latency. Neu can benchmark chuan nhu EleutherAI `lm-evaluation-harness`, dung provider `harness` hoac adapter OpenAI-compatible; Graph Memory se luu metadata/hint de agent sau biet nen chay benchmark ngoai nhu the nao.
+
+## 18. Runtime profile + chat noi bo theo workspace
+
+Runtime profile giup cac IDE/CLI dung chung quy tac chon model:
+
+```bash
+node graph-cli.js ai-profiles
+node graph-cli.js ai-profile-upsert --id profile-local-crawl --name "Local Crawl" --purpose crawl --provider provider-ollama-local --model qwen2.5-coder --contextPolicy low-token
+```
+
+Chat noi bo luu theo workspace:
+
+```bash
+node graph-cli.js ai-chat-start --workspacePath "C:\repo\stock" --title "OCR rollout" --profile profile-local-coding
+node graph-cli.js ai-chat-send --threadId ai-chat-abc --message "Dang dung o dau va nen sua file nao truoc?"
+node graph-cli.js ai-chat-send --workspacePath "C:\repo\stock" --purpose coding --autoPick true --message "Nen bat dau file nao?"
+node graph-cli.js ai-chat-threads --workspacePath "C:\repo\stock"
+node graph-cli.js ai-chat-thread ai-chat-abc --limit 20
+```
+
+Y nghia:
+
+1. `profile` quy dinh provider/model/context policy.
+2. `thread` luu hoi dap noi bo theo repo.
+3. Moi lan goi model tao `ai_model_runs` de lan sau biet model nao fail, model nao cham, model nao dang dung.
+4. IDE/CLI khac chi can list thread theo `workspacePath` de tiep tuc tu dung diem dung truoc.
+
+MCP tools:
+
+- `list_ai_runtime_profiles`
+- `upsert_ai_runtime_profile`
+- `list_ai_chat_threads`
+- `send_ai_chat_message`

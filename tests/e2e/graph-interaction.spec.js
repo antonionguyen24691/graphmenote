@@ -6,6 +6,23 @@ async function waitForGraphReady(page) {
 }
 
 test.describe("Graph interaction", () => {
+  test("renders workflow pack command panel", async ({ page }) => {
+    await waitForGraphReady(page);
+
+    await expect(page.locator("#workflowPrepPanel")).toBeVisible();
+    await expect(page.locator("#workflowPrepControls")).toBeVisible();
+    await expect(page.locator('[data-workflow-purpose="coding"]')).toBeVisible();
+    await expect(page.locator("#workflowPrepStatus")).toBeVisible();
+  });
+
+  test("renders AI runtime command panel", async ({ page }) => {
+    await waitForGraphReady(page);
+
+    await expect(page.locator("#aiRuntimePanel")).toBeVisible();
+    await expect(page.locator("#aiChatPrompt")).toBeVisible();
+    await expect(page.locator("#aiChatSendButton")).toBeVisible();
+  });
+
   test("click child node focuses panel", async ({ page }) => {
     await waitForGraphReady(page);
 
@@ -23,7 +40,7 @@ test.describe("Graph interaction", () => {
       const target = nodes.find((el) => {
         const role = el.getAttribute("data-graph-role");
         return role === "child" || role === "related" || role === "file";
-      });
+      }) || nodes.find((el) => !el.classList.contains("is-selected")) || nodes[0];
       if (!target) {
         return null;
       }

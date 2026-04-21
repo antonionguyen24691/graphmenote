@@ -116,6 +116,85 @@ Payload low-token gom:
 
 Skill Git duoc clone/pull vao `vault/skills/_git`, doc metadata tu `skill.json`, `SKILL.md`, `README.md`, va `package.json`, roi dua vao `brain-context` de agent dung nhu playbook truoc khi mo source code.
 
+## Local AI Provider Gateway + Harness
+
+Graph Memory co them lop gateway cho local model va model harness, dung OpenAI-compatible API lam giao dien chung. Mac dinh registry se co:
+
+- Ollama: `http://localhost:11434/v1`
+- llama.cpp server: `http://localhost:8080/v1`
+- vLLM: `http://localhost:8000/v1`
+- Custom `harness`/OpenAI-compatible provider co the dang ky them bang CLI, HTTP hoac MCP.
+
+Muc tieu: IDE/CLI/agent khong can tu scan lai repo qua nhieu token. Agent co the goi `ai-chat` voi `workspacePath`; Graph Memory se chen compact brain context gom recent work, reusable modules, skill hints va implementation thread vao prompt truoc khi goi local model.
+
+CLI:
+
+```bash
+node graph-cli.js ai-providers
+node graph-cli.js ai-provider-add ollama http://localhost:11434/v1 --model qwen2.5-coder --capabilities chat,json,harness
+node graph-cli.js ai-healthcheck --provider provider-ollama-local
+node graph-cli.js ai-chat --provider provider-ollama-local --model qwen2.5-coder --workspacePath "C:\repo\stock" --query "Tom tat viec can lam tiep"
+node graph-cli.js ai-harness-run --provider provider-ollama-local --suite harness
+node graph-cli.js ai-model-runs --limit 10
+node graph-cli.js ai-doctor --timeoutMs 1200
+node graph-cli.js ai-pick --purpose coding --checkHealth false
+```
+
+HTTP:
+
+- `GET /api/ai/providers`
+- `POST /api/ai/providers`
+- `POST /api/ai/providers/healthcheck`
+- `POST /api/ai/chat`
+- `POST /api/ai/harness/run`
+- `GET /api/ai/setup-doctor`
+- `GET /api/ai/runtime-pick`
+- `GET /api/ai/model-runs`
+
+MCP:
+
+- `list_ai_providers`
+- `register_ai_provider`
+- `healthcheck_ai_provider`
+- `chat_with_ai_provider`
+- `run_ai_harness`
+- `ai_setup_doctor`
+- `pick_ai_runtime`
+- `list_ai_model_runs`
+
+Harness note: built-in harness dung de smoke test, latency, JSON contract va integration memory. Neu can benchmark chuan hon, metadata provider da luu hint cho EleutherAI `lm-evaluation-harness` qua OpenAI-compatible adapter/proxy.
+
+### Runtime profiles + internal chat memory
+
+Graph Memory cung co runtime profile de agent chon model theo muc dich thay vi hard-code provider trong tung IDE/CLI:
+
+- `profile-local-chat`: hoi dap noi bo co compact workspace memory.
+- `profile-local-coding`: coding workflow, mac dinh huong toi local coder model.
+- `profile-local-harness`: evaluation/benchmark adapter.
+
+CLI:
+
+```bash
+node graph-cli.js ai-profiles
+node graph-cli.js ai-profile-upsert --id profile-local-crawl --name "Local Crawl" --purpose crawl --provider provider-ollama-local --model qwen2.5-coder --contextPolicy low-token
+node graph-cli.js ai-chat-start --workspacePath "C:\repo\stock" --title "OCR rollout" --profile profile-local-coding
+node graph-cli.js ai-chat-send --threadId ai-chat-abc --message "Dang dung o dau?"
+node graph-cli.js ai-chat-threads --workspacePath "C:\repo\stock"
+```
+
+MCP:
+
+- `list_ai_runtime_profiles`
+- `upsert_ai_runtime_profile`
+- `list_ai_chat_threads`
+- `send_ai_chat_message`
+
+Chat thread duoc luu theo workspace, kem provider/model/profile dang dung va run id cua moi lan goi model. Khi IDE/CLI khac mo lai repo, no co the list thread va tiep tuc hoi dap noi bo tu dung diem dung truoc.
+
+`ai-doctor` la lenh nen chay sau khi cai model local. No probe `/v1/models`, check profile co tro dung model khong, detect CLI nhu `ollama`, va tra ve backlog task con thieu cho local AI stack.
+
+`ai-pick` la router gon cho agent: nhap `purpose` nhu `coding`, `chat`, `harness`, `crawl`; he thong tra ve profile/provider/model nen dung va ly do cham diem. `ai-chat-send --autoPick true` co the dung picker nay de bot can hard-code model trong IDE/CLI.
+
 ## Chay local
 
 ```bash

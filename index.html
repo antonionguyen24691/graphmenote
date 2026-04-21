@@ -145,6 +145,40 @@
               </div>
               <div id="recommendationsList" class="command-list"></div>
             </article>
+
+            <article class="command-card command-card-wide workflow-pack-card">
+              <div class="section-heading">
+                <h3>Workflow Pack</h3>
+                <span id="workflowPrepMeta">low-token handoff</span>
+              </div>
+              <div id="workflowPrepControls" class="workflow-purpose-row" role="group" aria-label="Workflow purpose">
+                <button type="button" class="workflow-purpose-chip is-active" data-workflow-purpose="coding">Coding</button>
+                <button type="button" class="workflow-purpose-chip" data-workflow-purpose="review">Review</button>
+                <button type="button" class="workflow-purpose-chip" data-workflow-purpose="crawl">Crawl</button>
+                <button type="button" class="workflow-purpose-chip" data-workflow-purpose="deploy">Deploy</button>
+                <button type="button" class="workflow-purpose-chip" data-workflow-purpose="chat">Chat</button>
+              </div>
+              <div id="workflowPrepPanel" class="command-list"></div>
+              <p id="workflowPrepStatus" class="workflow-pack-status">Preparing the smallest useful handoff for this workspace.</p>
+            </article>
+
+            <article class="command-card command-card-wide ai-runtime-card">
+              <div class="section-heading">
+                <h3>AI Runtime</h3>
+                <span id="aiRuntimeMeta">local model router</span>
+              </div>
+              <div id="aiRuntimePanel" class="command-list"></div>
+              <form id="aiChatForm" class="ai-chat-form">
+                <input
+                  id="aiChatPrompt"
+                  type="text"
+                  autocomplete="off"
+                  placeholder="Ask internal AI with workspace memory"
+                />
+                <button id="aiChatSendButton" type="submit">Ask</button>
+              </form>
+              <p id="aiChatStatus" class="ai-chat-status">Runtime picker will choose the best local profile for this workspace.</p>
+            </article>
           </div>
         </section>
 

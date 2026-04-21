@@ -198,6 +198,126 @@ function handleLocalRequest(requestPath, options = {}) {
     return skill;
   }
 
+  if (method === "GET" && requestUrl.pathname === "/api/ai/providers") {
+    return db.listAiProviders({
+      kind: (requestUrl.searchParams.get("kind") || "").trim(),
+      status: (requestUrl.searchParams.get("status") || "").trim(),
+      limit: requestUrl.searchParams.get("limit"),
+    });
+  }
+
+  if (method === "GET" && requestUrl.pathname === "/api/ai/provider") {
+    const provider = db.getAiProvider((requestUrl.searchParams.get("providerId") || "").trim());
+    if (!provider) {
+      const error = new Error("provider_not_found");
+      error.status = 404;
+      throw error;
+    }
+    return provider;
+  }
+
+  if (method === "GET" && requestUrl.pathname === "/api/ai/model-runs") {
+    return db.listAiModelRuns({
+      providerId: (requestUrl.searchParams.get("providerId") || requestUrl.searchParams.get("provider") || "").trim(),
+      runType: (requestUrl.searchParams.get("runType") || requestUrl.searchParams.get("type") || "").trim(),
+      limit: requestUrl.searchParams.get("limit"),
+    });
+  }
+
+  if (method === "GET" && requestUrl.pathname === "/api/ai/setup-doctor") {
+    return db.runAiSetupDoctor({
+      timeoutMs: requestUrl.searchParams.get("timeoutMs"),
+      checkHealth: requestUrl.searchParams.get("checkHealth") !== "false",
+    });
+  }
+
+  if (method === "GET" && requestUrl.pathname === "/api/ai/runtime-pick") {
+    return db.pickAiRuntime({
+      purpose: (requestUrl.searchParams.get("purpose") || "").trim(),
+      timeoutMs: requestUrl.searchParams.get("timeoutMs"),
+      checkHealth: requestUrl.searchParams.get("checkHealth") === "true",
+      limit: requestUrl.searchParams.get("limit"),
+    });
+  }
+
+  if (method === "GET" && requestUrl.pathname === "/api/ai/runtime-profiles") {
+    return db.listAiRuntimeProfiles({
+      purpose: (requestUrl.searchParams.get("purpose") || "").trim(),
+      status: (requestUrl.searchParams.get("status") || "active").trim(),
+      limit: requestUrl.searchParams.get("limit"),
+    });
+  }
+
+  if (method === "GET" && requestUrl.pathname === "/api/ai/runtime-profile") {
+    const profile = db.getAiRuntimeProfile((requestUrl.searchParams.get("profileId") || requestUrl.searchParams.get("profile") || "").trim());
+    if (!profile) {
+      const error = new Error("runtime_profile_not_found");
+      error.status = 404;
+      throw error;
+    }
+    return profile;
+  }
+
+  if (method === "GET" && requestUrl.pathname === "/api/ai/chat-threads") {
+    return db.listAiChatThreads({
+      workspacePath: (requestUrl.searchParams.get("workspacePath") || "").trim(),
+      status: (requestUrl.searchParams.get("status") || "active").trim(),
+      limit: requestUrl.searchParams.get("limit"),
+    });
+  }
+
+  if (method === "GET" && requestUrl.pathname === "/api/ai/chat-thread") {
+    const thread = db.getAiChatThread((requestUrl.searchParams.get("threadId") || "").trim(), {
+      limit: requestUrl.searchParams.get("limit"),
+    });
+    if (!thread) {
+      const error = new Error("chat_thread_not_found");
+      error.status = 404;
+      throw error;
+    }
+    return thread;
+  }
+
+  if (method === "POST" && requestUrl.pathname === "/api/ai/providers") {
+    return safelyHandleLocalMutation(() => db.registerAiProvider(body), 400, "ai_provider_register_failed");
+  }
+
+  if (method === "POST" && requestUrl.pathname === "/api/ai/providers/healthcheck") {
+    return safelyHandleLocalMutation(
+      () => db.healthcheckAiProvider(body.providerId || body.provider, body),
+      400,
+      "ai_provider_healthcheck_failed"
+    );
+  }
+
+  if (method === "POST" && requestUrl.pathname === "/api/ai/chat") {
+    return safelyHandleLocalMutation(() => db.chatWithAiProvider(body), 400, "ai_chat_failed");
+  }
+
+  if (method === "POST" && requestUrl.pathname === "/api/ai/harness/run") {
+    return safelyHandleLocalMutation(() => db.runAiHarness(body), 400, "ai_harness_failed");
+  }
+
+  if (method === "POST" && requestUrl.pathname === "/api/ai/setup-doctor") {
+    return safelyHandleLocalMutation(() => db.runAiSetupDoctor(body), 400, "ai_setup_doctor_failed");
+  }
+
+  if (method === "POST" && requestUrl.pathname === "/api/ai/runtime-pick") {
+    return safelyHandleLocalMutation(() => db.pickAiRuntime(body), 400, "ai_runtime_pick_failed");
+  }
+
+  if (method === "POST" && requestUrl.pathname === "/api/ai/runtime-profiles") {
+    return safelyHandleLocalMutation(() => db.upsertAiRuntimeProfile(body), 400, "ai_runtime_profile_failed");
+  }
+
+  if (method === "POST" && requestUrl.pathname === "/api/ai/chat-threads") {
+    return safelyHandleLocalMutation(() => db.startAiChatThread(body), 400, "ai_chat_thread_failed");
+  }
+
+  if (method === "POST" && requestUrl.pathname === "/api/ai/chat-threads/message") {
+    return safelyHandleLocalMutation(() => db.sendAiChatMessage(body), 400, "ai_chat_thread_message_failed");
+  }
+
   if (method === "GET" && requestUrl.pathname === "/api/project-module-match") {
     return db.matchProjectToReusableModules({
       workspacePath: (requestUrl.searchParams.get("workspacePath") || "").trim(),
@@ -309,6 +429,17 @@ function handleLocalRequest(requestPath, options = {}) {
     });
   }
 
+  if (method === "GET" && requestUrl.pathname === "/api/workflow/prepare") {
+    return db.prepareWorkflowExecution({
+      workspacePath: (requestUrl.searchParams.get("workspacePath") || "").trim(),
+      purpose: (requestUrl.searchParams.get("purpose") || "").trim(),
+      query: (requestUrl.searchParams.get("query") || "").trim(),
+      capability: (requestUrl.searchParams.get("capability") || "").trim(),
+      checkHealth: requestUrl.searchParams.get("checkHealth") === "true",
+      timeoutMs: requestUrl.searchParams.get("timeoutMs"),
+    });
+  }
+
   if (method === "GET" && requestUrl.pathname === "/api/activity/runs") {
     return {
       results: db.listActivityRuns({
@@ -366,6 +497,15 @@ function handleLocalRequest(requestPath, options = {}) {
     );
   }
 
+  if (method === "POST" && requestUrl.pathname === "/api/workflow/prepare") {
+    return db.prepareWorkflowExecution(body).catch((error) => {
+      throw createRequestError(400, {
+        error: "workflow_prepare_failed",
+        message: error.message,
+      });
+    });
+  }
+
   if (method === "POST" && requestUrl.pathname === "/api/module-adoptions/record") {
     return safelyHandleLocalMutation(
       () => db.recordModuleAdoption(body),
@@ -394,6 +534,14 @@ function handleLocalRequest(requestPath, options = {}) {
     return safelyHandleLocalMutation(() => db.openStorageFolder(body.kind), 400, "open_folder_failed");
   }
 
+  if (method === "POST" && requestUrl.pathname === "/api/open-path") {
+    return safelyHandleLocalMutation(
+      () => db.openSystemPath(body.targetPath, body),
+      400,
+      "open_path_failed"
+    );
+  }
+
   if (method === "POST" && requestUrl.pathname === "/api/export") {
     return safelyHandleLocalMutation(() => db.exportGraph(body.targetPath), 400, "export_failed");
   }
@@ -415,19 +563,50 @@ function handleLocalRequest(requestPath, options = {}) {
   }
 
   if (method === "POST" && requestUrl.pathname === "/api/crawl-projects") {
-    return safelyHandleLocalMutation(() => {
+    return (async () => {
       const crawled = crawlProjectsLocal(body.rootPath, { maxDepth: body.maxDepth });
       const merged = db.mergeCrawledNodes(crawled, body.rootPath);
+      const sample = crawled.slice(0, 12).map((node) => ({
+        id: node.id,
+        name: node.name,
+        path: node.files[0],
+        type: node.type,
+      }));
+      const workspacePaths = [...new Set(
+        sample
+          .filter((node) => node.type === "project" || node.type === "workspace")
+          .map((node) => node.path)
+          .filter(Boolean)
+      )].slice(0, 4);
+      const workflow = await db.prepareWorkflowExecution({
+        workspacePath: body.rootPath,
+        purpose: "crawl",
+        query: body.query || "crawl workspace memory and prepare reuse/runtime hints",
+        checkHealth: body.checkHealth,
+        toolSource: body.toolSource || "api",
+      });
+      const projectWorkflows = [];
+      for (const workspacePath of workspacePaths) {
+        projectWorkflows.push(await db.prepareWorkflowExecution({
+          workspacePath,
+          purpose: "crawl",
+          query: body.query || "prepare project after crawl",
+          checkHealth: false,
+          toolSource: body.toolSource || "api",
+        }));
+      }
       return {
         ...merged,
-        sample: crawled.slice(0, 12).map((node) => ({
-          id: node.id,
-          name: node.name,
-          path: node.files[0],
-          type: node.type,
-        })),
+        sample,
+        workflow,
+        projectWorkflows,
       };
-    }, 400, "crawl_failed");
+    })().catch((error) => {
+      throw createRequestError(400, {
+        error: "crawl_failed",
+        message: error.message,
+      });
+    });
   }
 
   if (method === "POST" && requestUrl.pathname === "/api/modules/register") {
@@ -715,6 +894,91 @@ async function updateBrainSkillFromGit(payload = {}) {
   });
 }
 
+async function listAiProviders(filters = {}) {
+  return request(`/api/ai/providers${toQueryString(filters)}`);
+}
+
+async function getAiProvider(providerId) {
+  return request(`/api/ai/provider${toQueryString({ providerId })}`);
+}
+
+async function registerAiProvider(payload = {}) {
+  return request("/api/ai/providers", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+async function healthcheckAiProvider(payload = {}) {
+  return request("/api/ai/providers/healthcheck", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+async function chatWithAiProvider(payload = {}) {
+  return request("/api/ai/chat", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+async function runAiHarness(payload = {}) {
+  return request("/api/ai/harness/run", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+async function listAiModelRuns(filters = {}) {
+  return request(`/api/ai/model-runs${toQueryString(filters)}`);
+}
+
+async function runAiSetupDoctor(filters = {}) {
+  return request(`/api/ai/setup-doctor${toQueryString(filters)}`);
+}
+
+async function pickAiRuntime(filters = {}) {
+  return request(`/api/ai/runtime-pick${toQueryString(filters)}`);
+}
+
+async function listAiRuntimeProfiles(filters = {}) {
+  return request(`/api/ai/runtime-profiles${toQueryString(filters)}`);
+}
+
+async function getAiRuntimeProfile(profileId) {
+  return request(`/api/ai/runtime-profile${toQueryString({ profileId })}`);
+}
+
+async function upsertAiRuntimeProfile(payload = {}) {
+  return request("/api/ai/runtime-profiles", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+async function listAiChatThreads(filters = {}) {
+  return request(`/api/ai/chat-threads${toQueryString(filters)}`);
+}
+
+async function getAiChatThread(threadId, filters = {}) {
+  return request(`/api/ai/chat-thread${toQueryString({ threadId, ...filters })}`);
+}
+
+async function startAiChatThread(payload = {}) {
+  return request("/api/ai/chat-threads", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+async function sendAiChatMessage(payload = {}) {
+  return request("/api/ai/chat-threads/message", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 async function matchProjectToReusableModules(filters = {}) {
   return request(`/api/project-module-match${toQueryString(filters)}`);
 }
@@ -756,6 +1020,13 @@ async function getLowTokenContext(filters = {}) {
 
 async function getImplementationContext(filters = {}) {
   return request(`/api/implementation/context${toQueryString(filters)}`);
+}
+
+async function prepareWorkflowExecution(payload = {}) {
+  return request("/api/workflow/prepare", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 async function listActivityRuns(filters = {}) {
@@ -811,10 +1082,17 @@ async function openStorageFolder(kind) {
   });
 }
 
-async function crawlProjects(rootPath, maxDepth = 3) {
+async function openSystemPath(targetPath, options = {}) {
+  return request("/api/open-path", {
+    method: "POST",
+    body: JSON.stringify({ targetPath, ...options }),
+  });
+}
+
+async function crawlProjects(rootPath, maxDepth = 3, options = {}) {
   return request("/api/crawl-projects", {
     method: "POST",
-    body: JSON.stringify({ rootPath, maxDepth }),
+    body: JSON.stringify({ rootPath, maxDepth, ...options }),
   });
 }
 
@@ -956,6 +1234,7 @@ module.exports = {
   getAdoptionRecipe,
   getGraph,
   getImplementationContext,
+  prepareWorkflowExecution,
   getModuleAdoptionMemory,
   getModuleVerificationMemory,
   getNode,
@@ -969,6 +1248,7 @@ module.exports = {
   listActivityRuns,
   listBrainSkills,
   openStorageFolder,
+  openSystemPath,
   recordEdit,
   recordError,
   registerBrainSkill,
@@ -980,6 +1260,22 @@ module.exports = {
   scaffoldVault,
   startActivity,
   findReusableModules,
+  getAiProvider,
+  listAiProviders,
+  registerAiProvider,
+  healthcheckAiProvider,
+  chatWithAiProvider,
+  runAiHarness,
+  listAiModelRuns,
+  runAiSetupDoctor,
+  pickAiRuntime,
+  listAiRuntimeProfiles,
+  getAiRuntimeProfile,
+  upsertAiRuntimeProfile,
+  listAiChatThreads,
+  getAiChatThread,
+  startAiChatThread,
+  sendAiChatMessage,
   matchProjectToReusableModules,
   impactOfChange,
   applyAdoptionPatchDraft,
