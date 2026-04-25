@@ -5,6 +5,7 @@ Prototype nay cung cap mot lop `graph-memory` dung chung cho UI, VS Code extensi
 Huong dan dung theo workflow hang ngay nam tai:
 
 - [USAGE.md](C:\Users\DELL\OneDrive\Desktop\sang kein\Graph\USAGE.md)
+- [Agent Workspace Brain implementation plan](docs/agent-workspace-brain-implementation-plan.md)
 
 ## Thanh phan
 
